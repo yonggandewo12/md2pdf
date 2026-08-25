@@ -26,6 +26,9 @@
 - **DOCX 生成** — HTML/Markdown/纯文本 → 带样式的 Word 文档（基于 `docx` npm 包，纯 JS）
 - **DOCX 编辑** — 打开已有 .docx 改段落/插图片/插表格/改样式/读结构（基于 python-docx，已嵌入运行时）
 - **PDF 后处理** — 给 PDF 加文字/图片水印、嵌入二维码（基于 pdf-lib，纯 JS）
+- **PDF 操作** — 合并/拆分/提取/压缩/加密/解密（pdf-lib + PyMuPDF）
+- **PPTX 读取/编辑** — 读取已有 PPT 结构/文本/渲染图片，替换文字/表格/复制页/加备注/设转场（python-pptx + template_fill_pptx）
+- **图片处理** — 格式转换/缩放/压缩/旋转/裁切/水印（基于 Pillow）
 
 ---
 
@@ -131,7 +134,7 @@ claude mcp add general-tools \
 > - **Claude Code（项目级）：** `.claude.json`
 > - **Claude Desktop：** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-配置后重启 Claude Code，执行 `claude mcp list` 应看到 48 个工具（10 个通用 + 25 个 Excel + 13 个 DOCX/PDF）。
+配置后重启 Claude Code，执行 `claude mcp list` 应看到 71 个工具（10 个通用 + 25 个 Excel + 13 个 DOCX/PDF + 6 个 PDF 操作 + 10 个 PPTX 编辑 + 7 个图片处理）。
 
 ### 平台支持与首次运行提示
 
@@ -546,6 +549,54 @@ Claude，把 https://example.com 转为 Markdown
 
 > **依赖**：python-docx 已嵌入运行时（`scripts/build-platform-package.py` 打包），无需手动安装；`docx`/`pdf-lib` 为 npm dependencies，随主包分发。
 
+### 工具 47–52：PDF 操作（`pdf_*`）
+
+6 个工具，页级 PDF 操作。合并/拆分/提取/压缩为纯 JS（pdf-lib），加密/解密走 PyMuPDF（已嵌入运行时）。
+
+| 工具 | 说明 |
+|------|------|
+| `pdf_merge_pdfs` | 合并多个 PDF 为一个文件（`pdfPaths` 数组 + `outputPath`） |
+| `pdf_split_pdf` | 按页码范围拆分（`"1-3,5,7-9"` 语法）为多个文件 |
+| `pdf_extract_pages` | 提取指定页到单个新 PDF |
+| `pdf_compress_pdf` | 重新打包压缩（`useObjectStreams`，移除增量更新） |
+| `pdf_encrypt_pdf` | 设置用户/所有者密码与权限（`permissions`：printing/modifying/copying 等） |
+| `pdf_decrypt_pdf` | 输入密码解密 PDF |
+
+> **依赖**：加密/解密需 PyMuPDF（`fitz`/`pymupdf`），已嵌入运行时；其余纯 JS 零依赖。
+
+### 工具 53–62：PPTX 读取/编辑（`pptx_*`）
+
+10 个工具，读取与编辑已有 PowerPoint（python-pptx + template_fill_pptx，均已嵌入运行时）。与 `generate_presentation`（从 SVG 生成新 PPT）互补。
+
+| 工具 | 说明 |
+|------|------|
+| `pptx_read_presentation` | 总览：页数、尺寸、每页标题与 shape 数 |
+| `pptx_read_slide_details` | 单页 shapes 详情（名称/类型/位置/文本/表格） |
+| `pptx_extract_text` | 整份转 Markdown（保留标题/项目符号/表格/备注） |
+| `pptx_to_images` | 每页渲染为 PNG/JPEG（PyMuPDF 渲染，`"1-3,5"` 选页） |
+| `pptx_replace_text` | 按 shape 选择器替换指定页文字 |
+| `pptx_replace_table_cells` | 替换指定页表格单元格 |
+| `pptx_duplicate_slide` | 复制指定页（追加到末尾，保留原页） |
+| `pptx_add_notes` | 给多页添加演讲者备注 |
+| `pptx_set_transitions` | 设置转场效果（fade/push/wipe 等） |
+| `pptx_apply_plan` | 通用 template_fill_pptx plan 应用（替换/表格/图表/备注/转场） |
+
+> **转场契约**：编辑类工具（`pptx_replace_text` / `pptx_replace_table_cells` / `pptx_duplicate_slide` / `pptx_add_notes`）**保留**源文件的转场设置，不会改动页面切换效果；`pptx_set_transitions` 仅设置目标页（`slides` 未指定时作用于全部页），未指定的页保留源转场。仅 `pptx_apply_plan` 默认注入 `fade` 转场（可通过 `transition` 参数覆盖，`transition: null` 表示保留源转场）。
+
+### 工具 63–69：图片处理（`image_*`）
+
+7 个工具，本地图片处理（Pillow，已嵌入运行时）。
+
+| 工具 | 说明 |
+|------|------|
+| `image_info` | 读取尺寸/格式/模式/EXIF 方向 |
+| `image_convert` | 格式转换（目标格式由输出扩展名决定） |
+| `image_resize` | 缩放（fit/fill/pad/stretch，保持比例） |
+| `image_compress` | 质量压缩 + 可选最大尺寸限制 |
+| `image_rotate` | 任意角度旋转（`degrees` 可选，省略或 0 时仅做 EXIF 方向矫正） |
+| `image_crop` | 像素坐标裁切 |
+| `image_watermark` | 文字/图片水印（6 锚点 + tile 平铺，CJK 字体自动选择） |
+
 ---
 
 ## 架构
@@ -559,6 +610,13 @@ general-tools/
 │   ├── pdf-converter.ts      # Puppeteer PDF 转换核心
 │   ├── pdf-extractor.ts      # LiteParse PDF 文本/截图提取
 │   ├── pdf-postprocess.ts    # PDF 水印/二维码（pdf-lib）
+│   ├── pdf-ops.ts            # PDF 合并/拆分/提取/压缩（纯 JS pdf-lib）
+│   ├── pdf-service.ts        # PDF 加密/解密（PyMuPDF 子进程）
+│   ├── pdf-tools.ts          # PDF 操作工具 schema 与 action 映射
+│   ├── ppt-service.ts        # PPTX 读取/编辑（python-pptx 子进程）
+│   ├── ppt-tools.ts          # PPTX 读取/编辑工具 schema 与 action 映射
+│   ├── image-service.ts      # 图片处理（Pillow 子进程）
+│   ├── image-tools.ts        # 图片处理工具 schema 与 action 映射
 │   ├── html-to-docx.ts       # HTML → DOCX 转换器（docx npm 包）
 │   ├── docx-service.ts       # DOCX 生成（纯 JS）+ 编辑（python-docx 子进程）
 │   ├── docx-tools.ts         # DOCX/PDF 工具 schema 与 action 映射
@@ -568,6 +626,11 @@ general-tools/
 ├── scripts/
 │   ├── ppt-master/
 │   │   └── scripts/          # ppt-master Python 脚本（svg_to_pptx 等）
+│   │       ├── ppt_mcp/      # PPTX 读取/编辑子进程入口（run.py + reader/writer）
+│   │       └── image_mcp/    # 图片处理子进程入口（run.py + ops + cjk_fonts）
+│   ├── pdf/
+│   │   ├── run.py            # PDF 加密/解密子进程入口（PyMuPDF）
+│   │   └── pdf_ops.py        # PyMuPDF 加密/解密实现
 │   └── docx/
 │       ├── run.py            # DOCX 编辑子进程入口
 │       └── docx_mcp/         # python-docx 编辑动作模块

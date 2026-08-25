@@ -22,6 +22,13 @@ import { EXCEL_TOOLS, EXCEL_ACTION_MAP } from './excel-tools.js';
 import { DOCX_TOOLS, DOCX_ACTION_MAP } from './docx-tools.js';
 import { getDocxService } from './docx-service.js';
 import { pdfPostProcessor } from './pdf-postprocess.js';
+import { PDF_TOOLS, PDF_ACTION_MAP } from './pdf-tools.js';
+import { PdfService } from './pdf-service.js';
+import { mergePdfs, splitPdf, extractPages, compressPdf } from './pdf-ops.js';
+import { PPT_TOOLS, PPT_ACTION_MAP } from './ppt-tools.js';
+import { PptService } from './ppt-service.js';
+import { IMAGE_TOOLS, IMAGE_ACTION_MAP } from './image-tools.js';
+import { ImageService } from './image-service.js';
 
 /**
  * Read the package version once at startup so the MCP server advertises the
@@ -55,6 +62,18 @@ function getPptService(): PptMasterService {
 let excelSvc: ExcelService | null = null;
 function getExcelService(): ExcelService {
   return (excelSvc ??= new ExcelService());
+}
+let pdfSvc: PdfService | null = null;
+function getPdfService(): PdfService {
+  return (pdfSvc ??= new PdfService());
+}
+let pptEditSvc: PptService | null = null;
+function getPptEditService(): PptService {
+  return (pptEditSvc ??= new PptService());
+}
+let imageSvc: ImageService | null = null;
+function getImageService(): ImageService {
+  return (imageSvc ??= new ImageService());
 }
 
 const CONVERT_HTML_TO_PDF_TOOL: Tool = {
@@ -654,7 +673,7 @@ class Md2PdfServer {
     // List available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       return {
-        tools: [CONVERT_HTML_TO_PDF_TOOL, CONVERT_HTML_TO_IMAGE_TOOL, CONVERT_MD_TO_HTML_TOOL, CONVERT_MD_TO_PDF_TOOL, RECOGNIZE_TEXT_TOOL, EXTRACT_PDF_TEXT_TOOL, SCREENSHOT_PDF_TOOL, GENERATE_PRESENTATION_TOOL, GENERATE_IMAGE_TOOL, CONVERT_TO_MARKDOWN_TOOL, ...EXCEL_TOOLS, ...DOCX_TOOLS]
+        tools: [CONVERT_HTML_TO_PDF_TOOL, CONVERT_HTML_TO_IMAGE_TOOL, CONVERT_MD_TO_HTML_TOOL, CONVERT_MD_TO_PDF_TOOL, RECOGNIZE_TEXT_TOOL, EXTRACT_PDF_TEXT_TOOL, SCREENSHOT_PDF_TOOL, GENERATE_PRESENTATION_TOOL, GENERATE_IMAGE_TOOL, CONVERT_TO_MARKDOWN_TOOL, ...EXCEL_TOOLS, ...DOCX_TOOLS, ...PDF_TOOLS, ...PPT_TOOLS, ...IMAGE_TOOLS]
       };
     });
 
@@ -1199,6 +1218,78 @@ class Md2PdfServer {
         } catch (error) {
           return {
             content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }, null, 2) }],
+            isError: true,
+          };
+        }
+      }
+
+      const pdfAction = PDF_ACTION_MAP[name];
+      if (pdfAction) {
+        try {
+          const argsObj = (args as Record<string, unknown>) ?? {};
+          let result: unknown;
+          if (pdfAction === 'encrypt' || pdfAction === 'decrypt') {
+            // PyMuPDF 子进程加密/解密
+            result = await getPdfService().call(pdfAction, argsObj);
+          } else {
+            // 纯 JS pdf-lib 操作
+            switch (pdfAction) {
+              case 'merge':
+                result = await mergePdfs(argsObj.pdfPaths as string[], argsObj.outputPath as string);
+                break;
+              case 'split':
+                result = await splitPdf(argsObj.pdfPath as string, argsObj.pageRanges as string, argsObj.outputDir as string | undefined, argsObj.outputNamePrefix as string | undefined);
+                break;
+              case 'extract':
+                result = await extractPages(argsObj.pdfPath as string, argsObj.pageRanges as string, argsObj.outputPath as string);
+                break;
+              case 'compress':
+                result = await compressPdf(argsObj.pdfPath as string, argsObj.outputPath as string | undefined, (argsObj.useObjectStreams as boolean | undefined) ?? true);
+                break;
+              default:
+                throw new Error(`Unknown pdf action: ${pdfAction}`);
+            }
+          }
+          const ok = result != null && (result as { success?: boolean }).success === true;
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result) }],
+            isError: !ok,
+          };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }) }],
+            isError: true,
+          };
+        }
+      }
+
+      const pptAction = PPT_ACTION_MAP[name];
+      if (pptAction) {
+        try {
+          const result = await getPptEditService().call(pptAction, (args as Record<string, unknown>) ?? {});
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result) }],
+            isError: !result.success,
+          };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }) }],
+            isError: true,
+          };
+        }
+      }
+
+      const imageAction = IMAGE_ACTION_MAP[name];
+      if (imageAction) {
+        try {
+          const result = await getImageService().call(imageAction, (args as Record<string, unknown>) ?? {});
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result) }],
+            isError: !result.success,
+          };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }) }],
             isError: true,
           };
         }

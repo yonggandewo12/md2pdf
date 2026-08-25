@@ -3,7 +3,7 @@
 Build a per-platform npm sub-package that bundles:
 - Relocatable CPython 3.12 from python-build-standalone (PBS)
 - Pre-installed pip wheels (pptx, openpyxl, Pillow, ...)
-- The Python scripts from scripts/ppt-master/ and scripts/excel/
+- The Python scripts from scripts/ppt-master/, scripts/excel/, scripts/docx/ and scripts/pdf/
 
 Output: npm-dist/<platform>/ directory ready to publish.
 
@@ -261,7 +261,7 @@ def copy_scripts(out_dir: Path) -> None:
     if target.exists():
         shutil.rmtree(target)
     target.mkdir(parents=True)
-    for src in ("scripts/ppt-master", "scripts/excel", "scripts/docx"):
+    for src in ("scripts/ppt-master", "scripts/excel", "scripts/docx", "scripts/pdf"):
         if not Path(src).exists():
             log(f"WARN: source script dir missing: {src}")
             continue
