@@ -56,7 +56,7 @@ export const DOCX_TOOLS: Tool[] = [
   },
   {
     name: 'docx_convert_md_to_docx',
-    description: 'Convert Markdown file or content to a .docx Word document. Renders markdown to styled HTML then to DOCX.',
+    description: 'Convert Markdown file or content to a .docx Word document. Renders markdown to styled HTML then to DOCX. Mermaid code blocks are rendered as images via a headless browser (falls back to source text if rendering fails). Local images are embedded as base64.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -70,7 +70,7 @@ export const DOCX_TOOLS: Tool[] = [
   },
   {
     name: 'docx_convert_html_to_docx',
-    description: 'Convert HTML content to a .docx Word document with style preservation.',
+    description: 'Convert HTML content to a .docx Word document with style preservation. Images (data URIs or file paths) are embedded as ImageRun; unsupported formats (svg/webp) are silently skipped.',
     inputSchema: {
       type: 'object',
       properties: {

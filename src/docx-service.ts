@@ -106,12 +106,18 @@ ${content}
     }
   }
 
-  /** 将 Markdown 内容转为 .docx。链路：markdown → HTML（复用 MdConverter）→ DOCX。 */
+  /** 将 Markdown 内容转为 .docx。链路：markdown → HTML（复用 MdConverter）→ DOCX。
+   *
+   * 若提供 `renderMermaid` 回调（由调用方注入 PdfConverter 的渲染能力），会先把
+   * HTML 中的 mermaid 块渲染成图片再转 DOCX；渲染失败或未提供时降级保留原文
+   * （mermaid 源码以文本呈现），绝不因 mermaid 失败而中断转换。
+   */
   async convertMdToDocx(
     mdContent: string,
     baseDir?: string,
     outputPath?: string,
     opts: DocxMdOptions = {},
+    renderMermaid?: (html: string) => Promise<{ html: string; count: number }>,
   ): Promise<DocxResult> {
     const start = Date.now();
     try {
@@ -121,7 +127,18 @@ ${content}
         { embedImages: opts.embedImages ?? true, toc: false },
         baseDir,
       );
-      const buffer = await htmlToDocx.convertHtmlToDocx(html);
+
+      let finalHtml = html;
+      if (renderMermaid && /class="[^"]*\bmermaid\b/.test(html)) {
+        try {
+          const rendered = await renderMermaid(html);
+          finalHtml = rendered.html;
+        } catch {
+          // 渲染失败 → 降级保留原文（mermaid 块在 docx 中以源码文本呈现）
+        }
+      }
+
+      const buffer = await htmlToDocx.convertHtmlToDocx(finalHtml);
       await fs.mkdir(path.dirname(finalOutputPath), { recursive: true });
       await fs.writeFile(finalOutputPath, buffer);
       return {

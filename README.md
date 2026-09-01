@@ -337,6 +337,13 @@ Claude，把 README.md 转成 PDF，A4 格式，带交互导航
 
 其余 PDF 参数（`format`, `landscape`, `scale` 等）与 HTML 工具一致。
 
+**分页质量自检（返回值）：**
+
+- `stats.removedHrs`：渲染后移除的紧邻 h1/h2 的 `<hr>` 数量。节间 `---` 分隔线在上节内容恰好满页时会被单独挤成纯空白页，工具自动移除以根治（h2 自带分隔线，视觉无损）。
+- `stats.warnings`：非致命提示。嵌入图片以横向为主（≥3 张且横向占比 ≥60%）且未传 `landscape` 时，输出建议横版的警告——竖版下横向大图会被压缩连排、页数骤变。
+- `pageCount` / `pageSize`：输出 PDF 的页数与首页尺寸（pt），直接可信，无需 mdls（可能返回陈旧值）或外部 PyMuPDF。
+- `blankPages`：完全空白页的 1-based 页码列表（无空白页时不出现；出现时同时写入 `stats.warnings`）。
+
 ### 工具 5：`recognize_text`
 
 基于百度智能云 OCR API，从图片、PDF 或 OFD 文件中提取文字，支持中英文及多种语言。
@@ -524,8 +531,8 @@ Claude，把 https://example.com 转为 Markdown
 | 工具 | 说明 |
 |------|------|
 | `docx_create_document` | 从 HTML 内容（或纯文本，自动包装）创建带样式的 .docx |
-| `docx_convert_md_to_docx` | Markdown 内容 → .docx（经 markdown→HTML→DOCX 管线，保留标题/粗斜体/列表/表格/代码块） |
-| `docx_convert_html_to_docx` | HTML 内容 → .docx（h1-h6/p/strong/em/ul/ol/table/blockquote/pre 样式映射，含 XSS 清洗） |
+| `docx_convert_md_to_docx` | Markdown 内容 → .docx（经 markdown→HTML→DOCX 管线，保留标题/粗斜体/列表/表格/代码块；Mermaid 代码块经无头浏览器渲染为图片，失败时降级为源码文本；本地图片自动嵌入） |
+| `docx_convert_html_to_docx` | HTML 内容 → .docx（h1-h6/p/strong/em/ul/ol/table/blockquote/pre/img 样式映射，含 XSS 清洗） |
 
 **DOCX 编辑已有文档**（基于 python-docx，子进程调用，python-docx 已嵌入运行时）：
 
@@ -703,7 +710,7 @@ fc-cache -fv
 - **浏览器实例池**：单例模式，首次调用时启动 Chrome，后续复用
 - **错误处理**：文件校验、超时控制、崩溃恢复、资源清理
 - **图片嵌入**：根据 Markdown 所在目录解析相对路径，转为 data:image URI
-- **Mermaid**：检测到代码块时自动加载 CDN JS 并渲染
+- **Mermaid**：检测到代码块时自动加载 CDN JS 并渲染；DOCX 转换时经无头浏览器渲染为 PNG 图片嵌入（先用 curl 下载 mermaid.min.js 到 home 缓存目录再注入以避开 headless 代理超时，curl 不可用时回退 Node fetch；渲染失败降级为源码文本，不中断转换）
 - **OCR 服务**：
   - 输入优先级：image > url > pdf_file > ofd_file
   - 支持 PDF/OFD 文件识别，可指定页码

@@ -247,7 +247,7 @@ const CONVERT_MD_TO_HTML_TOOL: Tool = {
 
 const CONVERT_MD_TO_PDF_TOOL: Tool = {
   name: 'convert_md_to_pdf',
-  description: 'Convert Markdown file or Markdown content to PDF. Renders Markdown to a professionally styled HTML report (with responsive tables, Mermaid diagrams, image embedding) then converts to PDF via browser rendering.',
+  description: 'Convert Markdown file or Markdown content to PDF. Renders Markdown to a professionally styled HTML report (with responsive tables, Mermaid diagrams, image embedding) then converts to PDF via browser rendering. The response self-checks the output PDF (pageCount, pageSize, blankPages) and stats.warnings may suggest landscape: true when most embedded images are wide.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -291,7 +291,7 @@ const CONVERT_MD_TO_PDF_TOOL: Tool = {
       },
       landscape: {
         type: 'boolean',
-        description: 'Use landscape orientation (default: false)'
+        description: 'Use landscape orientation (default: false). Landscape-oriented images are squeezed in portrait mode; when most embedded images are wide, the result includes a suggestion to retry with landscape: true'
       },
       printBackground: {
         type: 'boolean',
@@ -890,6 +890,15 @@ class Md2PdfServer {
             if (result.details?.stats) {
               response.stats = result.details.stats;
             }
+            if (result.details?.pageCount !== undefined) {
+              response.pageCount = result.details.pageCount;
+            }
+            if (result.details?.pageSize) {
+              response.pageSize = `${result.details.pageSize.width}x${result.details.pageSize.height}pt`;
+            }
+            if (result.details?.blankPages && result.details.blankPages.length > 0) {
+              response.blankPages = result.details.blankPages;
+            }
             return {
               content: [
                 {
@@ -1200,7 +1209,17 @@ class Md2PdfServer {
                   const parsed = path.parse(mdPathArg);
                   docxOutputPath = path.join(parsed.dir, `${parsed.name}.docx`);
                 }
-                result = await svc.convertMdToDocx(mdText, baseDir, docxOutputPath, { title: argsObj.title as string | undefined, embedImages: argsObj.embedImages as boolean | undefined });
+                result = await svc.convertMdToDocx(
+                  mdText,
+                  baseDir,
+                  docxOutputPath,
+                  {
+                    title: argsObj.title as string | undefined,
+                    embedImages: argsObj.embedImages as boolean | undefined,
+                  },
+                  // 有 mermaid 时用共享浏览器渲染为图片；失败由 DocxService 降级
+                  (html: string) => converter.renderMermaidBlocks(html),
+                );
                 break;
               }
               case 'convert_html_to_docx':

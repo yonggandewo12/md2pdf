@@ -2,10 +2,13 @@
  * HTML → DOCX 转换器（doc-ops-mcp MIT 许可移植）。
  *
  * 用 cheerio 解析 HTML，将 h1-h6 / p / strong / em / u / blockquote / pre /
- * code / ul / ol / table 映射为 docx 包的 Paragraph / TextRun / Table，保留内联样式
- * （字号/颜色/加粗/斜体/下划线/对齐）。含 XSS 清洗。
+ * code / ul / ol / table / img 映射为 docx 包的 Paragraph / TextRun / Table /
+ * ImageRun，保留内联样式（字号/颜色/加粗/斜体/下划线/对齐）。含 XSS 清洗。
  */
-import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, UnderlineType, Table, TableRow, TableCell, WidthType } from 'docx';
+import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, UnderlineType, Table, TableRow, TableCell, WidthType, ImageRun } from 'docx';
+import { imageSize } from 'image-size';
+import { readFileSync } from 'fs';
+import * as path from 'path';
 import * as cheerio from 'cheerio';
 
 interface StyleMapping {
@@ -24,6 +27,7 @@ interface ParsedElement {
   text: string;
   html: string;
   styles: any;
+  src?: string;
 }
 
 const FONT_FALLBACK =
@@ -39,7 +43,16 @@ export class HtmlToDocxConverter {
   /** 清理 HTML 内容，移除危险标签与内联事件/协议。 */
   private sanitizeHtml(html: string): string {
     if (!html || typeof html !== 'string') return '';
-    return html
+    // 先屏蔽 data:image URI：on\w+= 正则会把以 "on<单词>=" 结尾的 base64 当事件属性
+    // 误伤（base64 字符集含 "on" 前缀字母），清洗完成后还原，避免破坏内嵌图片。
+    // nonce 防止用户正文里的字面量 "__IMG_0__" 在还原时被替换成图片 URI。
+    const nonce = Math.random().toString(36).slice(2, 8);
+    const placeholders: string[] = [];
+    const shielded = html.replace(/data:image\/[a-z0-9.+-]+;base64,[a-zA-Z0-9+/=]+/gi, (uri) => {
+      placeholders.push(uri);
+      return `__IMG_${nonce}_${placeholders.length - 1}__`;
+    });
+    const cleaned = shielded
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, '')
       .replace(/<object[^>]*>[\s\S]*?<\/object>/gi, '')
@@ -48,8 +61,11 @@ export class HtmlToDocxConverter {
       .replace(/on\w+\s*=\s*["'][^"']{0,500}?["']/gi, '')
       .replace(/javascript:/gi, '')
       .replace(/vbscript:/gi, '')
-      .replace(/data:/gi, '')
+      // 仅清除非图片的 data: URI（如 data:text/html 的 XSS 载体），
+      // 保留 <img src="data:image/..."> 的内嵌图片。
+      .replace(/data:(?!image\/)/gi, '')
       .replace(/<meta[^>]*>/gi, '');
+    return cleaned.replace(new RegExp(`__IMG_${nonce}_(\\d+)__`, 'g'), (_m, i) => placeholders[Number(i)] ?? '');
   }
 
   private initializeStyles(): void {
@@ -98,26 +114,57 @@ export class HtmlToDocxConverter {
     'div', 'main', 'section', 'article', 'header', 'footer', 'nav', 'aside', 'center',
   ]);
 
+  /** 渲染层/元数据标签：不产出 docx 内容（脚本、样式、表单等）。 */
+  private static readonly SKIP_TAGS = new Set([
+    'script', 'style', 'link', 'meta', 'title', 'head', 'iframe', 'noscript', 'template',
+  ]);
+
   private parseHtmlElements($: any): ParsedElement[] {
     const elements: ParsedElement[] = [];
     const collect = (elem: any): void => {
       const tagName = elem.tagName.toLowerCase();
-      if (HtmlToDocxConverter.CONTAINER_TAGS.has(tagName)) {
-        $(elem).children().each((_i: number, child: any) => collect(child));
+      if (HtmlToDocxConverter.SKIP_TAGS.has(tagName)) {
         return;
       }
-      const $elem = $(elem);
-      elements.push({
-        tag: tagName,
-        text: $elem.text(),
-        html: $elem.html(),
-        styles: this.extractStyles($elem),
-      });
+      if (HtmlToDocxConverter.CONTAINER_TAGS.has(tagName)) {
+        // 容器无元素子节点但有文本时按普通元素处理（保留容器内联样式），避免内容
+        // （如 mermaid 渲染失败后降级保留的 <div class="mermaid"> 源码）被静默丢弃。
+        if ($(elem).children('*').length === 0 && $(elem).text().trim()) {
+          this.pushElement(elements, $, elem, tagName);
+          return;
+        }
+        // 混合内容容器按文档顺序展开：顶层直接文本节点产出段落（继承容器内联
+        // 样式），元素子节点递归。若只按 children() 下钻，这些直接文本会丢失。
+        const containerStyles = this.extractStyles($(elem));
+        $(elem).contents().each((_i: number, node: any) => {
+          if (node.type === 'text') {
+            const text = $(node).text();
+            if (text.trim()) {
+              elements.push({ tag: 'p', text, html: '', styles: containerStyles });
+            }
+            return;
+          }
+          if (node.type === 'tag') collect(node);
+        });
+        return;
+      }
+      this.pushElement(elements, $, elem, tagName);
     };
     $('body')
       .children()
       .each((_i: number, elem: any) => collect(elem));
     return elements;
+  }
+
+  private pushElement(elements: ParsedElement[], $: any, elem: any, tagName: string): void {
+    const $elem = $(elem);
+    elements.push({
+      tag: tagName,
+      text: $elem.text(),
+      html: $elem.html(),
+      styles: this.extractStyles($elem),
+      src: tagName === 'img' ? ($elem.attr('src') ?? undefined) : undefined,
+    });
   }
 
   private extractStyles($elem: any): any {
@@ -144,6 +191,8 @@ export class HtmlToDocxConverter {
     const finalStyle = { ...baseStyle, ...customStyle };
 
     switch (element.tag) {
+      case 'img':
+        return this.createImageParagraph(element);
       case 'h1':
       case 'h2':
       case 'h3':
@@ -216,6 +265,65 @@ export class HtmlToDocxConverter {
     }
   }
 
+  /** 创建图片段落。支持 data:image URI 和文件路径。失败时返回 null（不崩溃）。 */
+  private createImageParagraph(element: ParsedElement): any {
+    try {
+      const run = this.createImageRun(element.src);
+      if (!run) return null;
+      return new Paragraph({
+        spacing: { before: 200, after: 200 },
+        children: [run],
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /** 从 src 创建 docx ImageRun；支持 data:image URI 和文件路径，失败返回 null。 */
+  private createImageRun(src: string | undefined): ImageRun | null {
+    try {
+      if (!src) return null;
+
+      // 解析图片二进制数据
+      let imgData: Buffer;
+      if (src.startsWith('data:image/')) {
+        // data URI → base64 → Buffer
+        const headerEnd = src.indexOf(',');
+        if (headerEnd === -1) return null;
+        imgData = Buffer.from(src.slice(headerEnd + 1), 'base64');
+      } else {
+        // 文件路径
+        const resolved = path.isAbsolute(src) ? src : path.resolve(process.cwd(), src);
+        imgData = readFileSync(resolved);
+      }
+
+      // 由内容签名探测尺寸与类型（不信任 mime/扩展名，防止伪造后缀的文件
+      // 以错误格式嵌入 docx 导致图片损坏）。
+      const dims = imageSize(imgData);
+      if (!dims || !dims.width || !dims.height) return null;
+      const type = dims.type === 'jpeg' ? 'jpg' : dims.type;
+      // docx ImageRun 仅支持 png/jpg/gif/bmp；svg/webp 等静默跳过（不崩溃）
+      if (type !== 'png' && type !== 'jpg' && type !== 'gif' && type !== 'bmp') return null;
+
+      // 限制最大宽度为 600px（DOCX 页面可读范围），按比例缩放
+      const maxW = 600;
+      let w = dims.width;
+      let h = dims.height;
+      if (w > maxW) {
+        h = Math.round(h * (maxW / w));
+        w = maxW;
+      }
+
+      return new ImageRun({
+        type,
+        data: imgData,
+        transformation: { width: w, height: h },
+      });
+    } catch {
+      return null;
+    }
+  }
+
   private createTextRuns(element: ParsedElement, baseStyle: StyleMapping, $: any): any[] {
     const runs: any[] = [];
     const { html } = element;
@@ -223,12 +331,10 @@ export class HtmlToDocxConverter {
       return [this.createSimpleTextRun(element.text, baseStyle)];
     }
     const sanitizedHtml = this.sanitizeHtml(html);
-    // 无标签的纯文本不交给 cheerio：`$(string)` 会把无 `<` 的字符串当 CSS 选择器解析，
-    // 含 `/` 等非法选择器语法的文本（如 "macOS / Linux"）会抛 Unmatched selector。
     if (!sanitizedHtml.includes('<')) {
       return [this.createSimpleTextRun(element.text, baseStyle)];
     }
-    const $content = $(sanitizedHtml);
+    const $content = $('<div>' + sanitizedHtml + '</div>');
     if ($content.length === 0) {
       return [this.createSimpleTextRun(element.text, baseStyle)];
     }
@@ -284,6 +390,13 @@ export class HtmlToDocxConverter {
   }
 
   private processTagNode(node: any, baseStyle: StyleMapping, runs: any[], $: any): void {
+    // 行内图片：markdown ![](x) 渲染为 <p><img></p>，需产出 ImageRun
+    if (node.name === 'img') {
+      const src = $(node).attr('src');
+      const run = this.createImageRun(src);
+      if (run) runs.push(run);
+      return;
+    }
     const tagStyle = this.applyTagStyles(node, baseStyle, $);
     // cheerio 的 .text() 已完成 HTML 实体解码，无需再手动 decode
     const text = $(node).text();
@@ -347,7 +460,7 @@ export class HtmlToDocxConverter {
   private createListElements(element: ParsedElement, baseStyle: StyleMapping, $: any): any[] {
     const paragraphs: any[] = [];
     const sanitizedHtml = this.sanitizeHtml(element.html);
-    const $list = $(sanitizedHtml);
+    const $list = $('<div>' + sanitizedHtml + '</div>');
     $list.find('li').each((i: number, li: any) => {
       const $li = $(li);
       const text = $li.text();
@@ -367,7 +480,7 @@ export class HtmlToDocxConverter {
   /** HTML 表格 → 真正的 docx Table（等宽网格 + 表头加粗底纹）。 */
   private createTableElements(element: ParsedElement, baseStyle: StyleMapping, $: any): any {
     const sanitizedHtml = this.sanitizeHtml(element.html);
-    const $table = $(sanitizedHtml);
+    const $table = $('<div>' + sanitizedHtml + '</div>');
     const cellTexts: string[][] = [];
     const headerFlags: boolean[] = [];
     let maxCols = 0;

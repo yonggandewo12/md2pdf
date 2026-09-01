@@ -1,7 +1,9 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
+import { imageSize } from 'image-size';
 import { MdToPdfOptions, ConvertMdResult, MdConvertStats, PAPER_FORMAT_DIMENSIONS } from './types.js';
 import { PdfConverter } from './pdf-converter.js';
+import { probePdf, PdfProbeResult } from './pdf-probe.js';
 import markdownit from 'markdown-it';
 import anchor from 'markdown-it-anchor';
 
@@ -41,8 +43,16 @@ function escapeHtml(s: string): string {
 
 // ── Markdown pre-processing ────────────────────────────────────────
 
-async function embedImages(text: string, baseDir: string): Promise<string> {
-  const matches: { index: number; full: string; replacement: Promise<string> }[] = [];
+interface ImageDim {
+  width: number;
+  height: number;
+}
+
+async function embedImages(
+  text: string,
+  baseDir: string,
+): Promise<{ text: string; dims: ImageDim[] }> {
+  const matches: { index: number; full: string; replacement: Promise<{ md: string; dim?: ImageDim }> }[] = [];
   let m: RegExpExecArray | null;
   MD_IMAGE_RE.lastIndex = 0;
 
@@ -66,8 +76,21 @@ async function embedImages(text: string, baseDir: string): Promise<string> {
         };
         const mime = mimeMap[ext] || 'application/octet-stream';
         const data = await fs.readFile(imagePath);
-        return `![${alt}](data:${mime};base64,${data.toString('base64')})`;
-      }).catch(() => full),
+        // 尺寸探测失败（非常规格式等）只影响 landscape 建议统计，不阻塞嵌入
+        let dim: ImageDim | undefined;
+        try {
+          const size = imageSize(data);
+          if (size.width && size.height) {
+            dim = { width: size.width, height: size.height };
+          }
+        } catch {
+          // ignore
+        }
+        return {
+          md: `![${alt}](data:${mime};base64,${data.toString('base64')})`,
+          dim,
+        };
+      }).catch(() => ({ md: full })),
     });
   }
 
@@ -78,10 +101,11 @@ async function embedImages(text: string, baseDir: string): Promise<string> {
   let resultText = text;
   for (let i = matches.length - 1; i >= 0; i--) {
     const { index, full } = matches[i];
-    resultText = resultText.slice(0, index) + replacements[i] + resultText.slice(index + full.length);
+    resultText = resultText.slice(0, index) + replacements[i].md + resultText.slice(index + full.length);
   }
 
-  return resultText;
+  const dims = replacements.map((r) => r.dim).filter((d): d is ImageDim => d !== undefined);
+  return { text: resultText, dims };
 }
 
 function normalizeMarkdown(text: string): string {
@@ -186,6 +210,47 @@ function titleFromBody(body: string): string {
   const match = body.match(/<h1[^>]*>(.*?)<\/h1>/s);
   if (!match) return 'Markdown Report';
   return match[1].replace(/<.*?>/g, '').trim() || 'Markdown Report';
+}
+
+// ── 分页质量辅助 ────────────────────────────────────────────────────
+
+/**
+ * 删除紧邻 h1/h2 的 <hr>（节间 `---` 分隔线的渲染产物）。
+ *
+ * 打印 CSS 中 h2 自带 border-top 分隔线且 page-break-before: always；
+ * 上节内容恰好满页时该 hr 会被单独挤成一页，紧随其后的 h2 又强制翻页，
+ * 产生纯空白页，故渲染后移除。只处理 hr 的下一个兄弟元素是 h1/h2 的情况，
+ * 正文中间的 hr 分隔线不受影响。
+ */
+export function stripHrBeforeHeadings(body: string): { body: string; removed: number } {
+  let removed = 0;
+  const result = body.replace(/<hr\s*\/?>\s*(?=<h[12][\s>])/g, () => {
+    removed++;
+    return '';
+  });
+  return { body: result, removed };
+}
+
+// 横向图建议触发条件：本地嵌入图 ≥ 3 张，且横向图（宽 > 高 × 1.2）占比 ≥ 60%
+const LANDSCAPE_SUGGEST_MIN_IMAGES = 3;
+const LANDSCAPE_SUGGEST_SHARE = 0.6;
+
+/**
+ * 竖版 PDF 中横向大图会被压缩连排、页数骤变，故嵌入图以横向为主且调用方
+ * 未显式传 landscape 时，在 stats.warnings 输出建议；显式指定（true/false 均算）
+ * 视为调用方已知情，不提示。
+ */
+export function buildLandscapeWarning(
+  dims: ImageDim[],
+  landscapeExplicit?: boolean,
+): string | undefined {
+  if (landscapeExplicit !== undefined || dims.length < LANDSCAPE_SUGGEST_MIN_IMAGES) return undefined;
+  const landscapeCount = dims.filter((d) => d.width > d.height * 1.2).length;
+  if (landscapeCount / dims.length < LANDSCAPE_SUGGEST_SHARE) return undefined;
+  return (
+    `${landscapeCount} of ${dims.length} embedded images are landscape-oriented; ` +
+    'consider landscape: true for better page usage'
+  );
 }
 
 // ── Mermaid handling ───────────────────────────────────────────────
@@ -595,8 +660,11 @@ export class MdConverter {
 
     // 3. Embed images
     const embedImagesEnabled = options.embedImages !== false;
+    const imageDims: ImageDim[] = [];
     if (embedImagesEnabled && baseDir) {
-      text = await embedImages(text, baseDir);
+      const embedded = await embedImages(text, baseDir);
+      text = embedded.text;
+      imageDims.push(...embedded.dims);
     }
 
     // Count embedded images before conversion
@@ -616,6 +684,10 @@ export class MdConverter {
     // 5. Parse and render to HTML
     const tokens = md.parse(text, {});
     let body = md.renderer.render(tokens, md.options, {});
+
+    // 5.5 删除紧邻 h1/h2 的 hr（节间 --- 分隔线），防止被分页挤成独立空白页
+    const hrStripped = stripHrBeforeHeadings(body);
+    body = hrStripped.body;
 
     // 6. Wrap tables in .table-scroll
     body = body.replace(/(<table[\s>][\s\S]*?<\/table>)/g, '<div class="table-scroll">$1</div>');
@@ -684,6 +756,11 @@ export class MdConverter {
     const tableCount = (fixedBody.match(/<table[\s>]/g) || []).length;
     const imageCount = (fixedBody.match(/<img[\s>]/g) || []).length;
 
+    // 12. Non-fatal warnings: landscape suggestion based on embedded image aspect ratios
+    const warnings: string[] = [];
+    const landscapeWarn = buildLandscapeWarning(imageDims, options.landscape);
+    if (landscapeWarn) warnings.push(landscapeWarn);
+
     return {
       html: fullHtml,
       stats: {
@@ -692,6 +769,8 @@ export class MdConverter {
         embeddedImages: embeddedImagesCount,
         mermaid: mermaidCount,
         mermaidSource: mermaidSource !== 'none' ? mermaidSource : undefined,
+        removedHrs: hrStripped.removed,
+        ...(warnings.length ? { warnings } : {}),
       },
     };
   }
@@ -751,13 +830,33 @@ export class MdConverter {
 
       if (pdfResult.success) {
         const processingTime = Date.now() - startTime;
+
+        // 转换后自检：读输出 PDF 回传页数/页面尺寸/完全空白页。
+        // 探测失败（损坏/读取错误）只丢失自检信息，不影响转换结果。
+        let probe: PdfProbeResult | undefined;
+        if (pdfResult.outputPath) {
+          probe = await probePdf(pdfResult.outputPath).catch(() => undefined);
+        }
+        const finalStats: MdConvertStats = probe?.blankPages.length
+          ? {
+              ...stats,
+              warnings: [
+                ...(stats.warnings ?? []),
+                `Blank pages detected in output PDF: ${probe.blankPages.join(', ')}`,
+              ],
+            }
+          : stats;
+
         return {
           success: true,
           outputPath: pdfResult.outputPath,
           details: {
             processingTime,
             fileSize: pdfResult.details?.fileSize,
-            stats,
+            stats: finalStats,
+            pageCount: probe?.pageCount,
+            pageSize: probe?.pageSize,
+            blankPages: probe?.blankPages,
           },
         };
       } else {

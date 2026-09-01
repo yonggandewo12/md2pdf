@@ -102,6 +102,10 @@ export interface MdConvertStats {
   embeddedImages: number;
   mermaid: number;
   mermaidSource?: string;
+  /** 渲染后移除的紧邻 h1/h2 的 hr 数量（节间 --- 分隔线，防止被分页挤成空白页） */
+  removedHrs?: number;
+  /** 非致命提示：横版建议、空白页警告等 */
+  warnings?: string[];
 }
 
 export interface ConvertMdResult {
@@ -113,6 +117,12 @@ export interface ConvertMdResult {
     processingTime: number;
     fileSize?: number;
     stats?: MdConvertStats;
+    /** 输出 PDF 页数（pdf-lib 探测；失败时缺省） */
+    pageCount?: number;
+    /** 输出 PDF 首页尺寸（pt） */
+    pageSize?: { width: number; height: number };
+    /** 完全空白页的 1-based 页码列表（无则不产生警告） */
+    blankPages?: number[];
   };
 }
 

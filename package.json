@@ -1,6 +1,6 @@
 {
   "name": "general-tools-mcp-server",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "MCP server for HTML/Markdown/PDF conversion, OCR, PPT generation, AI image generation, and document-to-Markdown conversion",
   "type": "module",
   "bin": {
@@ -29,10 +29,10 @@
     "x64"
   ],
   "optionalDependencies": {
-    "general-tools-mcp-server-runtime-darwin-arm64": "1.4.3",
-    "general-tools-mcp-server-runtime-linux-arm64-gnu": "1.4.3",
-    "general-tools-mcp-server-runtime-linux-x64-gnu": "1.4.3",
-    "general-tools-mcp-server-runtime-win32-x64-msvc": "1.4.3"
+    "general-tools-mcp-server-runtime-darwin-arm64": "1.6.0",
+    "general-tools-mcp-server-runtime-linux-arm64-gnu": "1.6.0",
+    "general-tools-mcp-server-runtime-linux-x64-gnu": "1.6.0",
+    "general-tools-mcp-server-runtime-win32-x64-msvc": "1.6.0"
   },
   "scripts": {
     "build": "tsc",
@@ -66,6 +66,7 @@
     "cheerio": "^1.2.0",
     "docx": "^9.7.1",
     "fontkit": "^1.9.0",
+    "image-size": "^1.2.1",
     "markdown-it": "^14.2.0",
     "markdown-it-anchor": "^9.2.0",
     "pdf-lib": "^1.17.1",
@@ -76,6 +77,7 @@
     "@types/markdown-it": "^14.1.2",
     "@types/markdown-it-anchor": "^4.0.4",
     "@types/node": "^22.10.1",
+    "jszip": "^3.10.1",
     "tsx": "^4.22.3",
     "typescript": "^5.7.2",
     "vitest": "^4.1.7"
