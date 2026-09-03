@@ -30,6 +30,7 @@
  */
 
 import { promises as fs } from 'fs';
+import { ensureOcrRuntimeEnv } from './ocr-runtime-env.js';
 import type {
   StructureElementJs,
   TextItem,
@@ -366,6 +367,7 @@ export async function processPdfWithOcrBuffer(
   buffer: Buffer,
   options: ProcessPdfWithOcrOptions = {},
 ): Promise<NormalizedPdfDocument> {
+  ensureOcrRuntimeEnv();
   const m = await native();
   try {
     const result: OcrPdfResult = await m.processPdfWithOcr(buffer, {

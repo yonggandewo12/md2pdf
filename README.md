@@ -46,7 +46,7 @@
 发布到 npm 后，**用户侧只需两个命令**：
 
 ```bash
-# 1. 全局安装（主包 + 自动拉匹配平台的 Python 嵌入子包）
+# 1. 全局安装（主包 + 匹配平台的 Python 嵌入子包 + OCR 运行时库 onnxruntime-node）
 npm install -g general-tools-mcp-server
 
 # 2. 注册 MCP（路径解析到全局 node_modules）
@@ -55,6 +55,8 @@ claude mcp add general-tools -- node "$(npm root -g)/general-tools-mcp-server/di
 # 3. 验证
 claude mcp list | grep general-tools
 ```
+
+本地 OCR 同样开箱即用：server 启动后首次 OCR 调用时自动从全局 node_modules 定位 PDFium（liteparse 平台子包）与 ONNX Runtime（onnxruntime-node），无需设置任何环境变量；仅当需要覆盖自动定位结果时才显式设置 `PDFIUM_LIB_PATH` / `ORT_DYLIB_PATH`（见「本地 OCR 部署」小节）。
 
 **首次运行需要解锁嵌入 Python**（每个用户机器上各跑一次，build 端清除不传播）：
 
@@ -120,7 +122,7 @@ python3.12 -m pip install --break-system-packages -r scripts/docx/requirements.t
 **方式 A — CLI 一键添加（推荐）：**
 
 ```bash
-# 基础配置（全部工具开箱即用；本地 OCR 首次使用前见「本地 OCR 部署」小节）
+# 基础配置（全部工具与本地 OCR 开箱即用，OCR 运行时自动从 node_modules 定位）
 claude mcp add general-tools \
   -- node /Users/xuliang/Documents/project/general-tools/dist/index.js
 ```
@@ -193,22 +195,22 @@ ldd --version | head -1   # → ldd (Ubuntu GLIBC 2.35-0ubuntu3) 2.35
 
 ### 第四步（可选）：本地 OCR 部署
 
-本项目的 OCR 完全本地化，**不需要任何 API Key**。纯文本 PDF 与日常转换零依赖、开箱即用；仅当需要对**扫描版 PDF / 图片**做本地 OCR 时，需一次性准备 OCR 运行时：
+本项目的 OCR 完全本地化，**不需要任何 API Key**。`npm install -g` 即得完整 OCR 运行时，无需手动下载任何共享库：
 
 | 组件 | 说明 | 获取方式 |
 |------|------|---------|
 | **模型集**（约 31 MB） | PP-OCRv6 Small（检测 + 识别 + 字典，Apache-2.0） | **自动**：首个被 OCR 的页面触发下载并 SHA-256 校验，缓存于平台缓存目录（可用 `PDF_INSPECTOR_MODEL_CACHE` 指定根目录） |
-| **PDFium 共享库** | 页面渲染为位图（native-v7988） | [firecrawl/pdfium-rs releases](https://github.com/firecrawl/pdfium-rs/releases/tag/native-v7988)，按平台下载 `firecrawl-pdfium-<platform>.tgz` |
-| **ONNX Runtime 1.27.0** | CPU 推理运行时 | [microsoft/onnxruntime releases](https://github.com/microsoft/onnxruntime/releases/tag/v1.27.0)，按平台下载 |
+| **PDFium 共享库** | 页面渲染为位图 | **自动**：随 `@llamaindex/liteparse` 平台子包安装，首次 OCR 调用时自动定位 |
+| **ONNX Runtime** | CPU 推理运行时 | **自动**：随 `onnxruntime-node` 依赖安装（单包内置 darwin/linux/win32 三平台库），首次 OCR 调用时按平台自动定位 |
 
-下载后通过环境变量指向解压出的共享库：
+自动定位仅在 `PDFIUM_LIB_PATH` / `ORT_DYLIB_PATH` **未设置**时生效；显式设置的环境变量优先，用于指向自备的共享库：
 
 ```bash
 export PDFIUM_LIB_PATH=/absolute/path/to/libpdfium.dylib      # Windows: pdfium.dll
 export ORT_DYLIB_PATH=/absolute/path/to/libonnxruntime.dylib  # Windows: onnxruntime.dll
 ```
 
-**平台支持：** macOS Apple Silicon 与 Linux x64 已实测全链路；Linux ARM64 资产齐备；Windows 为官方 preview 状态。OCR 运行时缺失时工具**不会失败**——`extract_pdf_text`/`convert_to_markdown` 自动回退原生提取并附 warning，server 启动不受任何影响。
+**平台支持：** macOS Apple Silicon 已实测全链路（含自动定位）；Linux x64/ARM64 与 Windows（官方 preview）运行时库随 npm 包分发。OCR 运行时缺失时工具**不会失败**——`extract_pdf_text`/`convert_to_markdown` 自动回退原生提取并附 warning，server 启动不受任何影响。
 
 **离线环境：** 预先填好模型目录后设 `PDF_INSPECTOR_MODEL_CACHE`，或使用工具的 offline 选项禁止网络访问。
 

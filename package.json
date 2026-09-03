@@ -1,6 +1,6 @@
 {
   "name": "general-tools-mcp-server",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "MCP server for HTML/Markdown/PDF conversion, local OCR, PDF classification, PPT generation, and document-to-Markdown conversion",
   "type": "module",
   "bin": {
@@ -29,10 +29,10 @@
     "x64"
   ],
   "optionalDependencies": {
-    "general-tools-mcp-server-runtime-darwin-arm64": "1.7.0",
-    "general-tools-mcp-server-runtime-linux-arm64-gnu": "1.7.0",
-    "general-tools-mcp-server-runtime-linux-x64-gnu": "1.7.0",
-    "general-tools-mcp-server-runtime-win32-x64-msvc": "1.7.0"
+    "general-tools-mcp-server-runtime-darwin-arm64": "1.8.0",
+    "general-tools-mcp-server-runtime-linux-arm64-gnu": "1.8.0",
+    "general-tools-mcp-server-runtime-linux-x64-gnu": "1.8.0",
+    "general-tools-mcp-server-runtime-win32-x64-msvc": "1.8.0"
   },
   "scripts": {
     "build": "tsc",
@@ -70,6 +70,7 @@
     "markdown-it": "^14.2.0",
     "markdown-it-anchor": "^9.2.0",
     "mermaid": "^10.9.8",
+    "onnxruntime-node": "^1.29.0",
     "pdf-lib": "^1.17.1",
     "puppeteer": "^23.11.1"
   },
