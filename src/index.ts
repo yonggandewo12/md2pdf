@@ -12,8 +12,9 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { PdfConverter } from './pdf-converter.js';
 import { MdConverter } from './md-converter.js';
-import { ConvertOptions, MdToPdfOptions, ConvertImageOptions, OcrOptions, PdfExtractOptions, PdfScreenshotOptions, GeneratePresentationOptions, GenerateImageOptions, ConvertToMarkdownOptions } from './types.js';
-import { OcrService } from './ocr-service.js';
+import { classifyPdf } from './pdf-inspector-service.js';
+import { ConvertOptions, MdToPdfOptions, ConvertImageOptions, OcrOptions, PdfExtractOptions, PdfScreenshotOptions, GeneratePresentationOptions, ConvertToMarkdownOptions } from './types.js';
+import { LocalOcrService } from './local-ocr-service.js';
 import { PdfExtractor } from './pdf-extractor.js';
 import { extractPdf } from './pdf-extract-adapter.js';
 import { PptMasterService } from './ppt-master-service.js';
@@ -46,7 +47,7 @@ function readPackageVersion(): string {
 
 const converter = new PdfConverter();
 const mdConverter = new MdConverter();
-const ocrService = new OcrService();
+const ocrService = new LocalOcrService();
 const pdfExtractor = new PdfExtractor();
 
 // PptMasterService / ExcelService construct their PythonScriptRunner
@@ -238,8 +239,8 @@ const CONVERT_MD_TO_HTML_TOOL: Tool = {
       },
       mermaidSource: {
         type: 'string',
-        enum: ['auto', 'cdn', 'local', 'none'],
-        description: 'Source for Mermaid diagram rendering. "auto": CDN if needed, "cdn": always CDN, "local": local mermaid.min.js, "none": skip Mermaid (default: auto)'
+        enum: ['auto', 'none'],
+        description: 'Mermaid diagram rendering: "auto" uses the bundled local mermaid.min.js (offline), "none" skips Mermaid (default: auto)'
       }
     }
   }
@@ -281,8 +282,8 @@ const CONVERT_MD_TO_PDF_TOOL: Tool = {
       },
       mermaidSource: {
         type: 'string',
-        enum: ['auto', 'cdn', 'local', 'none'],
-        description: 'Source for Mermaid diagram rendering. "auto": CDN if needed, "cdn": always CDN, "local": local mermaid.min.js, "none": skip Mermaid (default: auto)'
+        enum: ['auto', 'none'],
+        description: 'Mermaid diagram rendering: "auto" uses the bundled local mermaid.min.js (offline), "none" skips Mermaid (default: auto)'
       },
       format: {
         type: 'string',
@@ -343,70 +344,33 @@ const CONVERT_MD_TO_PDF_TOOL: Tool = {
 
 const RECOGNIZE_TEXT_TOOL: Tool = {
   name: 'recognize_text',
-  description: 'Extract text from images or PDF files using Baidu OCR API (supports Chinese and English)',
+  description: 'Extract text from images (PNG/JPEG) or PDF files using fully local OCR (PP-OCRv6 Small, offline, Chinese and English). No API key needed. Images are wrapped as single-page PDFs and OCR\'d; text-based PDFs return native text at zero cost.',
   inputSchema: {
     type: 'object',
     properties: {
-      apiKey: {
-        type: 'string',
-        description: 'Baidu Cloud API Key (optional if BAIDU_OCR_API_KEY env var is set)'
-      },
-      secretKey: {
-        type: 'string',
-        description: 'Baidu Cloud Secret Key (optional if BAIDU_OCR_SECRET_KEY env var is set)'
-      },
       imagePath: {
         type: 'string',
-        description: 'Local image file path (one of imagePath, imageUrl, imageBase64, pdfPath)'
+        description: 'Local image file path, PNG/JPEG (one of imagePath, imageUrl, imageBase64, pdfPath)'
       },
       imageUrl: {
         type: 'string',
-        description: 'Image URL (one of imagePath, imageUrl, imageBase64, pdfPath)'
+        description: 'Image URL, PNG/JPEG (one of imagePath, imageUrl, imageBase64, pdfPath)'
       },
       imageBase64: {
         type: 'string',
-        description: 'Base64 encoded image data (one of imagePath, imageUrl, imageBase64, pdfPath)'
+        description: 'Base64 encoded image data, PNG/JPEG (one of imagePath, imageUrl, imageBase64, pdfPath)'
       },
       pdfPath: {
         type: 'string',
-        description: 'Local PDF file path (one of imagePath, imageUrl, imageBase64, pdfPath, ofdPath). Priority: image > url > pdf_file > ofd_file'
+        description: 'Local PDF file path (one of imagePath, imageUrl, imageBase64, pdfPath). Priority: image > url > base64 > pdf'
       },
-      pdfFileNum: {
-        type: 'number',
-        description: 'PDF page number to recognize, starting from 1 (default: 1, only effective with pdfPath)'
-      },
-      ofdPath: {
+      targetPages: {
         type: 'string',
-        description: 'Local OFD file path (one of imagePath, imageUrl, imageBase64, pdfPath, ofdPath). Priority: image > url > pdf_file > ofd_file'
+        description: 'PDF pages to recognize, e.g. "1-5,10" (only with pdfPath, default: all pages)'
       },
-      ofdFileNum: {
+      dpi: {
         type: 'number',
-        description: 'OFD page number to recognize, starting from 1 (default: 1, only effective with ofdPath)'
-      },
-      languageType: {
-        type: 'string',
-        enum: ['auto_detect', 'CHN_ENG', 'ENG', 'JAP', 'KOR', 'FRE', 'SPA', 'POR', 'GER', 'ITA', 'RUS', 'DAN', 'DUT', 'MAL', 'SWE', 'IND', 'POL', 'ROM', 'TUR', 'GRE', 'HUN', 'THA', 'VIE', 'ARA', 'HIN'],
-        description: 'Language type for recognition (default: CHN_ENG)'
-      },
-      detectLanguage: {
-        type: 'boolean',
-        description: 'Detect language in the image (default: true)'
-      },
-      detectDirection: {
-        type: 'boolean',
-        description: 'Detect image orientation (default: false)'
-      },
-      paragraph: {
-        type: 'boolean',
-        description: 'Output paragraph information (default: false)'
-      },
-      probability: {
-        type: 'boolean',
-        description: 'Return confidence scores per line (default: true)'
-      },
-      multidirectionalRecognize: {
-        type: 'boolean',
-        description: 'Enable line-level multi-direction text recognition (default: false, set true when image has text in different directions)'
+        description: 'Rasterization DPI for OCR (default: 150)'
       }
     }
   }
@@ -414,7 +378,7 @@ const RECOGNIZE_TEXT_TOOL: Tool = {
 
 const EXTRACT_PDF_TEXT_TOOL: Tool = {
   name: 'extract_pdf_text',
-  description: 'Extract text, JSON, or Markdown from PDF files using layout-aware engine. Detects headings, tables, lists, and reading order. Scanned pages are flagged.',
+  description: 'Extract text, JSON, or Markdown from PDF files using layout-aware engine. Detects headings, tables, lists, and reading order. Scanned pages can be OCR\'d locally (offline PP-OCRv6 Small) via ocr="auto"/"force"; default only flags them.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -438,6 +402,26 @@ const EXTRACT_PDF_TEXT_TOOL: Tool = {
       password: {
         type: 'string',
         description: 'Password for encrypted PDF documents'
+      },
+      ocr: {
+        type: 'string',
+        enum: ['off', 'auto', 'force'],
+        description: 'Local OCR for scanned pages (PP-OCRv6 Small, offline; ~31 MB model cached on first use; needs PDFium + ONNX Runtime shared libs). "auto": only pages flagged by quality signals; "force": all selected pages; "off": flag only (default). Falls back to native text with a warning when the OCR runtime is unavailable.'
+      }
+    },
+    required: ['pdfPath']
+  }
+};
+
+const CLASSIFY_PDF_TOOL: Tool = {
+  name: 'classify_pdf',
+  description: 'Quickly classify a PDF as TextBased, Scanned, ImageBased, or Mixed (~10-50ms sampling). Returns page count, confidence, and which pages need OCR (1-indexed). Use it to pick an extraction strategy before extract_pdf_text (e.g. scanned → ocr="auto").',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      pdfPath: {
+        type: 'string',
+        description: 'Path to the local PDF file (required)'
       }
     },
     required: ['pdfPath']
@@ -539,53 +523,6 @@ const GENERATE_PRESENTATION_TOOL: Tool = {
   }
 };
 
-const GENERATE_IMAGE_TOOL: Tool = {
-  name: 'generate_image',
-  description: 'Generate an image using an AI image backend configured via environment variables (IMAGE_BACKEND, GEMINI_API_KEY, OPENAI_API_KEY, etc.). Supports 18+ backends including OpenAI, Gemini, Qwen, Zhipu, Volcengine, Agnes AI, Stability, and more.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      prompt: {
-        type: 'string',
-        description: 'Image generation prompt'
-      },
-      aspectRatio: {
-        type: 'string',
-        description: 'Aspect ratio (default: 16:9)'
-      },
-      imageSize: {
-        type: 'string',
-        description: 'Image size: 512px, 1K, 2K, 4K (default: 1K)'
-      },
-      backend: {
-        type: 'string',
-        description: 'Backend override, e.g. openai, gemini, qwen, zhipu, volcengine, agnes'
-      },
-      outputDir: {
-        type: 'string',
-        description: 'Output directory (default: cwd)'
-      },
-      filename: {
-        type: 'string',
-        description: 'Output filename without extension'
-      },
-      model: {
-        type: 'string',
-        description: 'Model override'
-      },
-      referenceImage: {
-        type: 'string',
-        description: 'Reference image URL for image-to-image generation (supported by agnes backend)'
-      },
-      timeout: {
-        type: 'number',
-        description: 'Timeout in milliseconds (default: 120000)'
-      }
-    },
-    required: ['prompt']
-  }
-};
-
 const CONVERT_TO_MARKDOWN_TOOL: Tool = {
   name: 'convert_to_markdown',
   description: 'Convert PDF, Word (docx/doc/odt/rtf/epub), Excel (xlsx/xls/xlsb/ods/csv), PowerPoint (pptx/ppt/odp), or web pages to Markdown. Auto-detects source type from file extension or URL.',
@@ -617,6 +554,11 @@ const CONVERT_TO_MARKDOWN_TOOL: Tool = {
         type: 'string',
         enum: ['all', 'filtered', 'none'],
         description: 'PDF image extraction mode (default: filtered)'
+      },
+      pdfOcr: {
+        type: 'string',
+        enum: ['off', 'auto', 'force'],
+        description: 'PDF scanned-page handling with local PP-OCRv6 Small (offline; ~31 MB model cached on first use; needs PDFium + ONNX Runtime shared libs). "auto" (default): OCR only pages flagged by quality signals; "force": OCR every page; "off": native extraction only.'
       },
       renderVectorFigures: {
         type: 'boolean',
@@ -673,7 +615,7 @@ class Md2PdfServer {
     // List available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       return {
-        tools: [CONVERT_HTML_TO_PDF_TOOL, CONVERT_HTML_TO_IMAGE_TOOL, CONVERT_MD_TO_HTML_TOOL, CONVERT_MD_TO_PDF_TOOL, RECOGNIZE_TEXT_TOOL, EXTRACT_PDF_TEXT_TOOL, SCREENSHOT_PDF_TOOL, GENERATE_PRESENTATION_TOOL, GENERATE_IMAGE_TOOL, CONVERT_TO_MARKDOWN_TOOL, ...EXCEL_TOOLS, ...DOCX_TOOLS, ...PDF_TOOLS, ...PPT_TOOLS, ...IMAGE_TOOLS]
+        tools: [CONVERT_HTML_TO_PDF_TOOL, CONVERT_HTML_TO_IMAGE_TOOL, CONVERT_MD_TO_HTML_TOOL, CONVERT_MD_TO_PDF_TOOL, RECOGNIZE_TEXT_TOOL, CLASSIFY_PDF_TOOL, EXTRACT_PDF_TEXT_TOOL, SCREENSHOT_PDF_TOOL, GENERATE_PRESENTATION_TOOL, CONVERT_TO_MARKDOWN_TOOL, ...EXCEL_TOOLS, ...DOCX_TOOLS, ...PDF_TOOLS, ...PPT_TOOLS, ...IMAGE_TOOLS]
       };
     });
 
@@ -825,7 +767,7 @@ class Md2PdfServer {
             keepInlineToc: keepInlineToc as boolean | undefined,
             withJs: withJs as boolean | undefined,
             toc: toc as boolean | undefined,
-            mermaidSource: mermaidSource as 'auto' | 'cdn' | 'local' | 'none' | undefined,
+            mermaidSource: mermaidSource as 'auto' | 'none' | undefined,
           }, baseDir);
 
           // Determine output path
@@ -942,49 +884,13 @@ class Md2PdfServer {
         try {
           const options = args as unknown as OcrOptions;
           const result = await ocrService.recognize(options);
-
-          if (result.success) {
-            const response: Record<string, unknown> = {
-              success: true,
-              text: result.text,
-              wordsResultNum: result.wordsResultNum,
-              processingTime: `${result.details?.processingTime}ms`,
-            };
-            if (result.language) {
-              response.language = result.language;
-            }
-            if (result.direction !== undefined) {
-              response.direction = result.direction;
-            }
-            if (result.wordsResult && result.wordsResult.length > 0) {
-              response.wordsResult = result.wordsResult;
-            }
-            if (result.apiUsed) {
-              response.apiUsed = result.apiUsed;
-            }
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(response, null, 2)
-                }
-              ]
-            };
-          } else {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    success: false,
-                    error: result.error,
-                    processingTime: `${result.details?.processingTime}ms`
-                  }, null, 2)
-                }
-              ],
-              isError: true
-            };
-          }
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            }],
+            isError: !result.success,
+          };
         } catch (error) {
           return {
             content: [
@@ -997,6 +903,37 @@ class Md2PdfServer {
               }
             ],
             isError: true
+          };
+        }
+      }
+
+      if (name === 'classify_pdf') {
+        try {
+          const options = args as unknown as { pdfPath: string };
+          const result = await classifyPdf(options.pdfPath);
+          // service 层 pagesNeedingOcr 为 0-indexed，对外统一 1-indexed
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                pdfType: result.pdfType,
+                pageCount: result.pageCount,
+                confidence: result.confidence,
+                pagesNeedingOcr: result.pagesNeedingOcr.map((p) => p + 1),
+              }, null, 2),
+            }],
+          };
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                success: false,
+                error: error instanceof Error ? error.message : String(error),
+              }, null, 2),
+            }],
+            isError: true,
           };
         }
       }
@@ -1104,22 +1041,6 @@ class Md2PdfServer {
         try {
           const options = args as GeneratePresentationOptions;
           const result = await getPptService().generatePresentation(options);
-          return {
-            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-            isError: !result.success,
-          };
-        } catch (error) {
-          return {
-            content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }, null, 2) }],
-            isError: true,
-          };
-        }
-      }
-
-      if (name === 'generate_image') {
-        try {
-          const options = args as unknown as GenerateImageOptions;
-          const result = await getPptService().generateImage(options);
           return {
             content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
             isError: !result.success,

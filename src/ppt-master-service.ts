@@ -2,12 +2,11 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import type { Format } from '@firecrawl/anydoc';
 import { PythonScriptRunner } from './python-runner.js';
-import { extractMarkdown } from './pdf-inspector-service.js';
+import { extractMarkdown, classifyPdf, processPdfWithOcrFor } from './pdf-inspector-service.js';
+import type { NormalizedPdfDocument } from './pdf-inspector-types.js';
 import {
   GeneratePresentationOptions,
   GeneratePresentationResult,
-  GenerateImageOptions,
-  GenerateImageResult,
   ConvertToMarkdownOptions,
   ConvertToMarkdownResult,
   MarkdownSourceType,
@@ -238,81 +237,6 @@ export class PptMasterService {
     if (result.exitCode !== 0) {
       throw new Error(`project_manager import-sources failed:\n${result.stdout}\n${result.stderr}`);
     }
-  }
-
-  // ------------------------------------------------------------------
-  // generate_image
-  // ------------------------------------------------------------------
-
-  async generateImage(options: GenerateImageOptions): Promise<GenerateImageResult> {
-    const start = Date.now();
-    try {
-      await this.runner.checkPython();
-
-      const outputDir = options.outputDir ? path.resolve(options.outputDir) : process.cwd();
-      await fs.mkdir(outputDir, { recursive: true });
-
-      const filename = options.filename ?? `img_${Date.now()}`;
-      const env: Record<string, string | undefined> = {};
-      if (options.backend) {
-        env.IMAGE_BACKEND = options.backend;
-      }
-
-      const args = [
-        options.prompt,
-        '--aspect_ratio', options.aspectRatio ?? '16:9',
-        '--image_size', options.imageSize ?? '1K',
-        '-o', outputDir,
-        '-f', filename,
-      ];
-      if (options.model) args.push('-m', options.model);
-      if (options.referenceImage) args.push('--reference_image', options.referenceImage);
-
-      const before = await this.listImageFiles(outputDir);
-      const result = await this.runner.run('image_gen.py', args, {
-        env,
-        timeoutMs: options.timeout ?? 120000,
-      });
-      if (result.exitCode !== 0) {
-        throw new Error(`image_gen failed:\n${result.stdout}\n${result.stderr}`);
-      }
-
-      const after = await this.listImageFiles(outputDir);
-      const newFiles = after.filter((f) => !before.includes(f));
-      const imagePath = newFiles.length === 1
-        ? path.join(outputDir, newFiles[0])
-        : await this.findGeneratedFile(outputDir, filename);
-
-      return {
-        success: true,
-        imagePath,
-        details: { processingTime: Date.now() - start, backend: options.backend },
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-        details: { processingTime: Date.now() - start },
-      };
-    }
-  }
-
-  private async listImageFiles(dir: string): Promise<string[]> {
-    const entries = await fs.readdir(dir).catch(() => []);
-    return entries.filter((e) => /\.(png|jpe?g|gif|webp|bmp)$/i.test(e));
-  }
-
-  private async findGeneratedFile(dir: string, stem: string): Promise<string> {
-    const entries = await fs.readdir(dir);
-    const matches = entries.filter((e) => e.startsWith(stem) && /\.(png|jpe?g|gif|webp|bmp)$/i.test(e));
-    if (matches.length === 0) {
-      throw new Error(`Could not locate generated image in ${dir}`);
-    }
-    const stats = await Promise.all(
-      matches.map(async (m) => ({ name: m, mtime: (await fs.stat(path.join(dir, m))).mtime }))
-    );
-    stats.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
-    return path.join(dir, stats[0].name);
   }
 
   // ------------------------------------------------------------------
@@ -592,15 +516,7 @@ export class PptMasterService {
       );
     }
 
-    const { markdown, pagesNeedingOcr } = await extractMarkdown(pdfPath);
-
-    if (pagesNeedingOcr.length > 0) {
-      console.warn(
-        `[convert_to_markdown] PDF has ${pagesNeedingOcr.length} page(s) flagged for OCR: ` +
-          pagesNeedingOcr.map((p) => p + 1).join(', ') +
-          '. Native text may be incomplete.',
-      );
-    }
+    const { markdown } = await this.extractPdfMarkdownWithOcr(pdfPath, options.pdfOcr ?? 'auto');
 
     await fs.writeFile(outputPath, markdown, 'utf-8');
 
@@ -609,5 +525,73 @@ export class PptMasterService {
       markdownPath: outputPath,
       details: { processingTime: Date.now() - start, sourceType: 'pdf' },
     };
+  }
+
+  /**
+   * PDF→markdown 提取，按 pdfOcr 语义路由：
+   * - 'auto'（默认）：先轻量分类；纯文本页走原生提取（零 OCR 开销），存在需 OCR
+   *   页时本地 PP-OCRv6 选择性 OCR。OCR 运行时缺失/模型获取失败 → 回退原生提取
+   *   （扫描页文本可能不完整）并 console.warn，绝不因 OCR 失败整体失败。
+   * - 'force'：跳过分类直接全页 OCR；失败直接抛错（显式请求不给静默降级）。
+   * - 'off'：仅原生提取（历史行为）。
+   */
+  private async extractPdfMarkdownWithOcr(
+    pdfPath: string,
+    pdfOcr: 'off' | 'auto' | 'force',
+  ): Promise<{ markdown: string }> {
+    if (pdfOcr === 'off') {
+      return extractMarkdown(pdfPath);
+    }
+
+    // hostedRecommended 页面告警：OCR 已完成但结果仍疑似不完整
+    const warnHostedRecommended = (doc: NormalizedPdfDocument): void => {
+      const hostedPages = doc.pages
+        .filter((p) => p.ocrProvenance?.hostedRecommended)
+        .map((p) => p.pageIndex + 1);
+      if (hostedPages.length > 0) {
+        console.warn(
+          `[convert_to_markdown] ${hostedPages.length} page(s) look incomplete after local OCR ` +
+            `(1-indexed: ${hostedPages.join(', ')}); consider a hosted parser.`,
+        );
+      }
+    };
+    const markdownFrom = (doc: NormalizedPdfDocument): { markdown: string } => ({
+      markdown: doc.pages.map((p) => p.markdown).join('\n\n'),
+    });
+
+    if (pdfOcr === 'auto') {
+      // 分类失败（损坏/加密等）→ 直接原生提取，由原生路径给出真实错误，
+      // 不误报为 OCR 运行时问题，也不重复执行提取。
+      let pagesNeedingOcr: number[];
+      try {
+        ({ pagesNeedingOcr } = await classifyPdf(pdfPath));
+      } catch {
+        return extractMarkdown(pdfPath);
+      }
+      if (pagesNeedingOcr.length === 0) {
+        return extractMarkdown(pdfPath);
+      }
+      console.warn(
+        `[convert_to_markdown] PDF has ${pagesNeedingOcr.length} page(s) needing OCR ` +
+          `(1-indexed: ${pagesNeedingOcr.map((p) => p + 1).join(', ')}); running local PP-OCRv6.`,
+      );
+      try {
+        const doc = await processPdfWithOcrFor(pdfPath, { mode: 'Auto' });
+        warnHostedRecommended(doc);
+        return markdownFrom(doc);
+      } catch (err) {
+        console.warn(
+          `[convert_to_markdown] Local OCR unavailable ` +
+            `(${err instanceof Error ? err.message : String(err)}); ` +
+            'falling back to native extraction, scanned-page text may be incomplete.',
+        );
+        return extractMarkdown(pdfPath);
+      }
+    }
+
+    // force：显式请求不给静默降级，失败直接抛错。
+    const doc = await processPdfWithOcrFor(pdfPath, { mode: 'Force' });
+    warnHostedRecommended(doc);
+    return markdownFrom(doc);
   }
 }

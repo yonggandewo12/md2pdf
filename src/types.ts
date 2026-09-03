@@ -76,8 +76,8 @@ export interface MdToPdfOptions {
   withJs?: boolean;
   /** Automatically generate a table of contents with anchor links (default: true) */
   toc?: boolean;
-  /** Mermaid diagram rendering source (default: 'auto') */
-  mermaidSource?: 'auto' | 'cdn' | 'local' | 'none';
+  /** Mermaid diagram rendering: 'auto' renders with the bundled local mermaid.min.js, 'none' skips (default: 'auto') */
+  mermaidSource?: 'auto' | 'none';
 
   // PDF output options
   outputPath?: string;
@@ -126,82 +126,42 @@ export interface ConvertMdResult {
   };
 }
 
-// === OCR (Baidu) ===
-
-export type OcrLanguageType =
-  | 'auto_detect'
-  | 'CHN_ENG'
-  | 'ENG'
-  | 'JAP'
-  | 'KOR'
-  | 'FRE'
-  | 'SPA'
-  | 'POR'
-  | 'GER'
-  | 'ITA'
-  | 'RUS'
-  | 'DAN'
-  | 'DUT'
-  | 'MAL'
-  | 'SWE'
-  | 'IND'
-  | 'POL'
-  | 'ROM'
-  | 'TUR'
-  | 'GRE'
-  | 'HUN'
-  | 'THA'
-  | 'VIE'
-  | 'ARA'
-  | 'HIN';
+// === OCR (local PP-OCRv6, fully offline) ===
 
 export interface OcrOptions {
-  /** 百度智能云 API Key（可选，优先从环境变量 BAIDU_OCR_API_KEY 读取） */
-  apiKey?: string;
-  /** 百度智能云 Secret Key（可选，优先从环境变量 BAIDU_OCR_SECRET_KEY 读取） */
-  secretKey?: string;
-  /** 本地图片文件路径（图片三选一） */
+  /** 本地图片文件路径（PNG/JPEG；四选一，图片优先于 PDF） */
   imagePath?: string;
-  /** 网络图片 URL（图片三选一） */
+  /** 网络图片 URL（PNG/JPEG） */
   imageUrl?: string;
-  /** Base64 编码图片数据（图片三选一） */
+  /** Base64 编码图片数据（PNG/JPEG；支持 data URI） */
   imageBase64?: string;
-  /** 本地 PDF 文件路径（与图片输入互斥，优先级高于图片） */
+  /** 本地 PDF 文件路径 */
   pdfPath?: string;
-  /** PDF 识别页码，从 1 开始（默认 1，仅 pdfPath 时有效） */
-  pdfFileNum?: number;
-  /** 本地 OFD 文件路径（与图片/PDF 输入互斥） */
-  ofdPath?: string;
-  /** OFD 识别页码，从 1 开始（默认 1，仅 ofdPath 时有效） */
-  ofdFileNum?: number;
-  /** 识别语言类型（默认 CHN_ENG） */
-  languageType?: OcrLanguageType;
-  /** 是否检测语言（默认 true） */
-  detectLanguage?: boolean;
-  /** 是否检测图像朝向（默认 false） */
-  detectDirection?: boolean;
-  /** 是否输出段落信息（默认 false） */
-  paragraph?: boolean;
-  /** 是否返回识别结果中每一行的置信度（默认 true） */
-  probability?: boolean;
-  /** 是否开启行级别多方向文字识别（默认 false，图内有不同方向文字时建议 true） */
-  multidirectionalRecognize?: boolean;
+  /** PDF 页码范围，如 "1-5,10"（仅 pdfPath 时有效，默认全部；1-indexed） */
+  targetPages?: string;
+  /** OCR 渲染分辨率 DPI（默认 150） */
+  dpi?: number;
 }
 
-export interface OcrWordItem {
-  words: string;
-  location?: { left: number; top: number; width: number; height: number };
-  probability?: { average: number; min: number; variance: number };
+/** 单页识别结果（页码 1-indexed）。 */
+export interface OcrPageResult {
+  page: number;
+  text: string;
+  /** 内容来源：Native=原生文本层，Ocr=本地 OCR，Fused=融合。 */
+  source: 'Native' | 'Ocr' | 'Fused';
+  /** OCR 置信度（0-1），仅 Ocr/Fused 页存在。 */
+  ocrConfidence?: number;
+  warnings: string[];
+  /** OCR 后仍空/低置信/疑似不完整。 */
+  hostedRecommended: boolean;
 }
 
 export interface OcrResult {
   success: boolean;
+  /** 全部页文本（多页时带 [Page N] 分隔）。 */
   text?: string;
-  language?: string;
-  direction?: number;
-  wordsResult?: OcrWordItem[];
-  wordsResultNum?: number;
-  apiUsed?: string;
+  pages?: OcrPageResult[];
+  pageCount?: number;
   error?: string;
   details?: { processingTime: number };
 }
@@ -221,6 +181,12 @@ export interface PdfExtractOptions {
   maxPages?: number;
   /** 加密 PDF 密码（可选） */
   password?: string;
+  /**
+   * 扫描页本地 OCR（PP-OCRv6 Small，离线小模型）：off 不 OCR（默认，仅标记）；
+   * auto 仅对质量信号判定需要 OCR 的页本地 OCR；force 对所有选中页强制 OCR。
+   * OCR 运行时缺失时自动回退为不 OCR 并附 warning。
+   */
+  ocr?: 'off' | 'auto' | 'force';
 }
 
 export interface PdfExtractResult {
@@ -317,39 +283,6 @@ export interface GeneratePresentationResult {
   };
 }
 
-// === AI Image Generation ===
-
-export interface GenerateImageOptions {
-  /** Image generation prompt */
-  prompt: string;
-  /** Aspect ratio (default: 16:9) */
-  aspectRatio?: string;
-  /** Image size: 512px, 1K, 2K, 4K (default: 1K) */
-  imageSize?: string;
-  /** Backend override, e.g. 'openai', 'gemini', 'agnes' */
-  backend?: string;
-  /** Output directory (default: process.cwd()) */
-  outputDir?: string;
-  /** Output filename without extension (default: generated) */
-  filename?: string;
-  /** Model override */
-  model?: string;
-  /** Reference image URL for image-to-image generation (supported by agnes backend) */
-  referenceImage?: string;
-  /** Per-call timeout in milliseconds (default: 120000) */
-  timeout?: number;
-}
-
-export interface GenerateImageResult {
-  success: boolean;
-  imagePath?: string;
-  error?: string;
-  details?: {
-    processingTime: number;
-    backend?: string;
-  };
-}
-
 // === Source to Markdown ===
 
 export type MarkdownSourceType = 'auto' | 'pdf' | 'doc' | 'excel' | 'ppt' | 'web';
@@ -367,6 +300,12 @@ export interface ConvertToMarkdownOptions {
   maxCols?: number;
   /** PDF image extraction mode: 'all' | 'filtered' | 'none' (default: filtered) */
   pdfImages?: 'all' | 'filtered' | 'none';
+  /**
+   * PDF scanned-page handling with local PP-OCRv6 Small (offline small model):
+   * 'auto' (default) OCRs only pages flagged by quality signals, 'force'
+   * OCRs every page, 'off' native extraction only (scanned pages stay flagged).
+   */
+  pdfOcr?: 'off' | 'auto' | 'force';
   /** Render PDF vector figures as PNG assets (default: false) */
   renderVectorFigures?: boolean;
   /** DPI for rendered PDF vector figures (default: 150) */

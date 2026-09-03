@@ -6,6 +6,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const mockExtractPages = vi.fn();
 const mockExtractMarkdown = vi.fn();
+const mockProcessPdfWithOcrFor = vi.fn();
+const mockClassifyPdf = vi.fn();
 
 vi.mock('../src/pdf-inspector-service.js', async () => {
   const actual = await vi.importActual<typeof import('../src/pdf-inspector-service.js')>(
@@ -15,6 +17,8 @@ vi.mock('../src/pdf-inspector-service.js', async () => {
     ...actual,
     extractPages: (...args: unknown[]) => mockExtractPages(...args),
     extractMarkdown: (...args: unknown[]) => mockExtractMarkdown(...args),
+    processPdfWithOcrFor: (...args: unknown[]) => mockProcessPdfWithOcrFor(...args),
+    classifyPdf: (...args: unknown[]) => mockClassifyPdf(...args),
   };
 });
 
@@ -23,6 +27,8 @@ import { extractPdf } from '../src/pdf-extract-adapter.js';
 beforeEach(() => {
   mockExtractPages.mockReset();
   mockExtractMarkdown.mockReset();
+  mockProcessPdfWithOcrFor.mockReset();
+  mockClassifyPdf.mockReset();
 });
 
 describe('extractPdf', () => {
@@ -228,5 +234,166 @@ describe('extractPdf', () => {
     const result = await extractPdf({ pdfPath: '/tmp/x.pdf', outputFormat: 'text', targetPages: 'abc' });
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/Invalid page range/);
+  });
+});
+
+/** OCR 路径的 NormalizedPdfDocument fixture。 */
+function ocrDoc(pages: Array<{ markdown: string; source: 'Native' | 'Ocr' | 'Fused'; ocrConfidence?: number; hostedRecommended?: boolean }>) {
+  return {
+    pageCount: pages.length,
+    pdfType: 'Unknown',
+    pages: pages.map((p, i) => ({
+      pageIndex: i,
+      markdown: p.markdown,
+      needsOcr: p.source !== 'Native',
+      textItems: [],
+      ocrProvenance: {
+        source: p.source,
+        ocrConfidence: p.ocrConfidence,
+        hostedRecommended: p.hostedRecommended ?? false,
+        warnings: [],
+      },
+    })),
+    pagesNeedingOcr: [0],
+    pagesWithTables: [],
+    pagesWithColumns: [],
+    processingTimeMs: 10,
+    isComplexLayout: false,
+    hasEncodingIssues: false,
+    confidence: 0,
+  };
+}
+
+describe('extractPdf OCR path', () => {
+  it('ocr=auto routes to processPdfWithOcrFor with 1-indexed pages and Auto mode', async () => {
+    mockProcessPdfWithOcrFor.mockResolvedValue(ocrDoc([{ markdown: 'A', source: 'Ocr', ocrConfidence: 0.97 }]));
+    const result = await extractPdf({ pdfPath: '/tmp/x.pdf', ocr: 'auto', targetPages: '1-2' });
+    expect(result.success).toBe(true);
+    expect(mockProcessPdfWithOcrFor).toHaveBeenCalledWith('/tmp/x.pdf', {
+      mode: 'Auto',
+      pages: [1, 2],
+      password: undefined,
+      includeTextItems: false,
+    });
+    expect(mockExtractPages).not.toHaveBeenCalled();
+  });
+
+  it('ocr=force maps to Force mode', async () => {
+    mockProcessPdfWithOcrFor.mockResolvedValue(ocrDoc([{ markdown: 'A', source: 'Ocr' }]));
+    await extractPdf({ pdfPath: '/tmp/x.pdf', ocr: 'force' });
+    expect(mockProcessPdfWithOcrFor).toHaveBeenCalledWith(
+      '/tmp/x.pdf',
+      expect.objectContaining({ mode: 'Force' }),
+    );
+  });
+
+  it('default does not trigger OCR', async () => {
+    mockExtractPages.mockResolvedValue({ pageCount: 1, pages: [], pagesNeedingOcr: [] });
+    await extractPdf({ pdfPath: '/tmp/x.pdf' });
+    expect(mockProcessPdfWithOcrFor).not.toHaveBeenCalled();
+    expect(mockClassifyPdf).not.toHaveBeenCalled();
+  });
+
+  it('caps pages via classify when no explicit selection and maxPages < pageCount', async () => {
+    mockClassifyPdf.mockResolvedValue({ pdfType: 'Scanned', pageCount: 100, confidence: 0.9, pagesNeedingOcr: [] });
+    mockProcessPdfWithOcrFor.mockResolvedValue(ocrDoc([{ markdown: 'A', source: 'Ocr' }]));
+    await extractPdf({ pdfPath: '/tmp/x.pdf', ocr: 'auto', maxPages: 5 });
+    expect(mockClassifyPdf).toHaveBeenCalledWith('/tmp/x.pdf');
+    expect(mockProcessPdfWithOcrFor).toHaveBeenCalledWith(
+      '/tmp/x.pdf',
+      expect.objectContaining({ pages: [1, 2, 3, 4, 5] }),
+    );
+  });
+
+  it('skips classify capping when maxPages >= pageCount', async () => {
+    mockClassifyPdf.mockResolvedValue({ pdfType: 'Scanned', pageCount: 3, confidence: 0.9, pagesNeedingOcr: [] });
+    mockProcessPdfWithOcrFor.mockResolvedValue(ocrDoc([{ markdown: 'A', source: 'Ocr' }]));
+    await extractPdf({ pdfPath: '/tmp/x.pdf', ocr: 'auto', maxPages: 5 });
+    expect(mockProcessPdfWithOcrFor).toHaveBeenCalledWith(
+      '/tmp/x.pdf',
+      expect.objectContaining({ pages: undefined }),
+    );
+  });
+
+  it('skips classify capping for encrypted PDFs', async () => {
+    mockProcessPdfWithOcrFor.mockResolvedValue(ocrDoc([{ markdown: 'A', source: 'Ocr' }]));
+    await extractPdf({ pdfPath: '/tmp/x.pdf', ocr: 'auto', password: 'pw', maxPages: 5 });
+    expect(mockClassifyPdf).not.toHaveBeenCalled();
+  });
+
+  it('setup failure falls back to native extraction with a warning', async () => {
+    mockProcessPdfWithOcrFor.mockRejectedValue(
+      new Error('process_pdf_with_ocr: failed to load PDFium; install a compatible PDFium shared library or set PDFIUM_LIB_PATH'),
+    );
+    mockExtractPages.mockResolvedValue({
+      pageCount: 1,
+      pages: [{ pageIndex: 0, markdown: 'native text', needsOcr: true, textItems: [] }],
+      pagesNeedingOcr: [0],
+    });
+    const result = await extractPdf({ pdfPath: '/tmp/x.pdf', ocr: 'auto', outputFormat: 'text' });
+    expect(result.success).toBe(true);
+    expect(result.text).toContain('Local OCR unavailable');
+    expect(result.text).toContain('PDFIUM_LIB_PATH');
+    expect(result.text).toContain('native text');
+    expect(mockExtractPages).toHaveBeenCalledTimes(1);
+  });
+
+  it('non-setup failure fails the call instead of silently degrading', async () => {
+    mockProcessPdfWithOcrFor.mockRejectedValue(new Error('boom'));
+    const result = await extractPdf({ pdfPath: '/tmp/x.pdf', ocr: 'auto' });
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('boom');
+  });
+
+  it('text output annotates OCR pages by provenance, not the flagged marker', async () => {
+    mockProcessPdfWithOcrFor.mockResolvedValue(
+      ocrDoc([
+        { markdown: 'scanned words', source: 'Ocr', ocrConfidence: 0.912 },
+        { markdown: 'native words', source: 'Native' },
+      ]),
+    );
+    const result = await extractPdf({ pdfPath: '/tmp/x.pdf', ocr: 'auto', outputFormat: 'text' });
+    expect(result.text).toContain('local OCR applied (confidence 0.91)');
+    expect(result.text).not.toContain('flagged for OCR');
+    expect(result.text).toContain('scanned words');
+  });
+
+  it('text output warns only for hostedRecommended pages', async () => {
+    mockProcessPdfWithOcrFor.mockResolvedValue(
+      ocrDoc([{ markdown: '', source: 'Ocr', hostedRecommended: true }]),
+    );
+    const result = await extractPdf({ pdfPath: '/tmp/x.pdf', ocr: 'auto', outputFormat: 'text' });
+    expect(result.text).toContain('OCR result looks incomplete');
+  });
+
+  it('markdown output prepends incomplete-page comment when hostedRecommended', async () => {
+    mockProcessPdfWithOcrFor.mockResolvedValue(
+      ocrDoc([
+        { markdown: 'a', source: 'Ocr' },
+        { markdown: 'b', source: 'Ocr', hostedRecommended: true },
+      ]),
+    );
+    const result = await extractPdf({ pdfPath: '/tmp/x.pdf', ocr: 'auto', outputFormat: 'markdown' });
+    expect(result.text).toMatch(/^<!-- OCR warning: 1 page\(s\) \[2\]/);
+    expect(result.text).toContain('a\n\nb');
+  });
+
+  it('json output includes ocrProvenance per page', async () => {
+    mockProcessPdfWithOcrFor.mockResolvedValue(
+      ocrDoc([{ markdown: 'A', source: 'Fused', ocrConfidence: 0.88 }]),
+    );
+    const result = await extractPdf({ pdfPath: '/tmp/x.pdf', ocr: 'auto', outputFormat: 'json' });
+    expect(result.success).toBe(true);
+    const doc = JSON.parse(result.text!);
+    expect(doc.pages[0].ocrProvenance).toEqual({
+      source: 'Fused',
+      ocrConfidence: 0.88,
+      hostedRecommended: false,
+      warnings: [],
+    });
+    expect(mockProcessPdfWithOcrFor).toHaveBeenCalledWith(
+      '/tmp/x.pdf',
+      expect.objectContaining({ includeTextItems: true }),
+    );
   });
 });

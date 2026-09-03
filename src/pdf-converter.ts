@@ -1,31 +1,17 @@
 import puppeteer, { Browser, PDFOptions as PuppeteerPDFOptions } from 'puppeteer';
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import * as cheerio from 'cheerio';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { pathToFileURL } from 'url';
 
-const execFileP = promisify(execFile);
 import { findChromiumExecutable } from './python-runner.js';
 import { ConvertOptions, ConvertResult, ConvertImageOptions, ImageConvertResult, PAPER_FORMAT_DIMENSIONS } from './types.js';
-
-const MERMAID_CDN = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
+import { mermaidBundlePath } from './mermaid-bundle.js';
 
 // 剔除 HTML 内嵌的 mermaid CDN <script src> 引用：同步脚本会阻塞 DOMContentLoaded
 // （headless shell 经代理下载 ~3.2MB 极慢甚至失败），渲染时用 addScriptTag 注入本地
 // 脚本替换。提取为模块级常量以便测试复用。
 export const MERMAID_SCRIPT_STRIP_RE = /<script[^>]*\bsrc=["'][^"']*mermaid[^"']*["'][^>]*>\s*<\/script>/gi;
-
-// mermaid.min.js 稳定缓存路径：首次下载后复用，避免每次 DOCX 转换重新下载 ~3.2MB
-// （下载失败时不落盘或清理暂存文件，下次调用重试；缓存文件必须在下载侧校验内容，
-// 否则 CDN 错误页/网络拦截页会被当作库文件永久占用缓存位）。
-const MERMAID_CACHE_DIR = path.join(
-  process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'),
-  'general-tools-mcp',
-);
-const MERMAID_CACHE_FILE = path.join(MERMAID_CACHE_DIR, 'mermaid.min.js');
 
 export class PdfConverter {
   private browser: Browser | null = null;
@@ -411,7 +397,7 @@ export class PdfConverter {
       // 先取（或下载）mermaid.min.js 到 home 缓存目录，再用 addScriptTag 注入，
       // 避免 headless shell 直连外部 CDN 时的代理超时。取不到（下载失败/空文件）
       // 时提前返回原文，避免下方 waitForFunction 无谓等待超时。
-      const mermaidLocalPath = await this.ensureMermaidJs();
+      const mermaidLocalPath = mermaidBundlePath();
 
       // 剔除 HTML 内嵌的 mermaid CDN <script src> 引用：它是同步脚本，会阻塞
       // DOMContentLoaded（headless shell 经代理下载 ~3.2MB 极慢甚至失败）。我们
@@ -524,87 +510,6 @@ export class PdfConverter {
       return { html: htmlContent, count: 0 };
     } finally {
       if (page) await page.close().catch(() => {});
-    }
-  }
-
-  /**
-   * 返回 mermaid.min.js 的本地路径（下载并缓存到 home 目录）；取不到返回 null。
-   *
-   * 优先 curl（读系统环境代理，Node fetch 不读代理）；curl 不可用的环境
-   * （部分 Windows 无 curl）回退 Node 内置 fetch（Node ≥18 全局可用）。
-   * 下载写临时文件再原子 rename 落盘，避免并发首次调用互相覆盖产生半截文件。
-   */
-  private async ensureMermaidJs(): Promise<string | null> {
-    // 0700 私有目录：缓存的 .js 会注入 headless 浏览器执行，多用户主机上须防止
-    // 其他用户篡改缓存实现 JS 注入。入口统一收紧（含缓存命中路径；无权限时忽略）。
-    await fs.chmod(MERMAID_CACHE_DIR, 0o700).catch(() => {});
-    try {
-      const stat = await fs.stat(MERMAID_CACHE_FILE);
-      if (stat.isFile() && stat.size > 0) {
-        return MERMAID_CACHE_FILE;
-      }
-    } catch {
-      // 缓存不存在 → 下载
-    }
-    // 随机后缀：同进程并发调用可能落在同一毫秒，仅 pid+时间戳会撞名互相覆盖，
-    // 产生交错半截文件。撞名窗口由随机后缀消除。
-    const tmpFile = path.join(
-      MERMAID_CACHE_DIR,
-      `mermaid-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tmp`,
-    );
-    try {
-      await fs.mkdir(MERMAID_CACHE_DIR, { recursive: true, mode: 0o700 });
-      await this.downloadMermaidJsTo(tmpFile);
-      // 内容校验：CDN 错误页/网络拦截页常以 HTTP 200 返回小体积 HTML（curl -f
-      // 无法拦截），只查 size>0 会让它永久占用缓存位，此后每次转换都注入废脚本
-      // 并空等渲染超时、静默降级。真实 mermaid.min.js 约 3MB：取 50KB 下限，
-      // 并嗅探头部是否 HTML（'<'/<html/<!doctype）。
-      const downloaded = await fs.readFile(tmpFile);
-      const head = downloaded.subarray(0, 512).toString('utf8').toLowerCase();
-      if (
-        downloaded.length < 50_000 ||
-        head.startsWith('<') ||
-        head.includes('<html') ||
-        head.includes('<!doctype')
-      ) {
-        throw new Error('invalid mermaid download');
-      }
-      // rename 原子落盘；并发调用可能已各自写好，先到先得，冲突无害
-      await fs.rename(tmpFile, MERMAID_CACHE_FILE);
-      return MERMAID_CACHE_FILE;
-    } catch {
-      // download/校验/rename 任何失败都清理暂存文件；若失败源于并发竞态
-      // （目标已被其他实例写入），下方 stat 会命中合法缓存直接复用，
-      // 否则返回 null 触发下次调用重试。
-      await fs.rm(tmpFile, { force: true }).catch(() => {});
-      try {
-        const s = await fs.stat(MERMAID_CACHE_FILE);
-        if (s.isFile() && s.size > 0) return MERMAID_CACHE_FILE;
-      } catch {
-        // 缓存不存在 → 返回 null
-      }
-      return null;
-    }
-  }
-
-  /** 下载 mermaid.min.js 到指定路径；curl 优先、Node fetch 兜底，失败抛错由调用方降级。 */
-  private async downloadMermaidJsTo(target: string): Promise<void> {
-    try {
-      await execFileP('curl', ['-sfSL', '--max-time', '30', '-o', target, MERMAID_CDN], { timeout: 40000 });
-      return;
-    } catch {
-      // curl 不可用或失败 → 回退 Node fetch
-    }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000);
-    try {
-      const res = await fetch(MERMAID_CDN, { signal: controller.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length === 0) throw new Error('empty body');
-      await fs.writeFile(target, buf);
-    } finally {
-      clearTimeout(timer);
     }
   }
 

@@ -1,7 +1,7 @@
 {
   "name": "general-tools-mcp-server",
-  "version": "1.6.0",
-  "description": "MCP server for HTML/Markdown/PDF conversion, OCR, PPT generation, AI image generation, and document-to-Markdown conversion",
+  "version": "1.7.0",
+  "description": "MCP server for HTML/Markdown/PDF conversion, local OCR, PDF classification, PPT generation, and document-to-Markdown conversion",
   "type": "module",
   "bin": {
     "general-tools-mcp-server": "./dist/index.js"
@@ -29,10 +29,10 @@
     "x64"
   ],
   "optionalDependencies": {
-    "general-tools-mcp-server-runtime-darwin-arm64": "1.6.0",
-    "general-tools-mcp-server-runtime-linux-arm64-gnu": "1.6.0",
-    "general-tools-mcp-server-runtime-linux-x64-gnu": "1.6.0",
-    "general-tools-mcp-server-runtime-win32-x64-msvc": "1.6.0"
+    "general-tools-mcp-server-runtime-darwin-arm64": "1.7.0",
+    "general-tools-mcp-server-runtime-linux-arm64-gnu": "1.7.0",
+    "general-tools-mcp-server-runtime-linux-x64-gnu": "1.7.0",
+    "general-tools-mcp-server-runtime-win32-x64-msvc": "1.7.0"
   },
   "scripts": {
     "build": "tsc",
@@ -54,7 +54,7 @@
     "presentation",
     "markdown",
     "ocr",
-    "image-generation"
+    "pdf-classification"
   ],
   "author": "",
   "license": "MIT",
@@ -69,6 +69,7 @@
     "image-size": "^1.2.1",
     "markdown-it": "^14.2.0",
     "markdown-it-anchor": "^9.2.0",
+    "mermaid": "^10.9.8",
     "pdf-lib": "^1.17.1",
     "puppeteer": "^23.11.1"
   },

@@ -55,6 +55,22 @@ export interface NormalizedPage {
   needsOcr: boolean;
   ocrReason?: string;
   textItems: TextItem[];
+  /**
+   * OCR 路径（processPdfWithOcr）填充：该页内容来源与质量信息。
+   * native 提取路径（extractPagesMarkdownAsync）为 undefined。
+   */
+  ocrProvenance?: NormalizedOcrProvenance;
+}
+
+/** 单页 OCR 来源与质量摘要（0-indexed 语义无关，仅透传 NAPI 字段）。 */
+export interface NormalizedOcrProvenance {
+  /** 页面内容来源：Native=原生文本，Ocr=本地 OCR，Fused=两者融合。 */
+  source: 'Native' | 'Ocr' | 'Fused';
+  /** OCR 置信度（0-1），仅 Ocr/Fused 页存在。 */
+  ocrConfidence?: number;
+  /** OCR 完成后仍空/低置信/疑似不完整，建议托管解析。 */
+  hostedRecommended: boolean;
+  warnings: string[];
 }
 
 /** Group 1-indexed TextItems into a 0-indexed page → items map. */
@@ -127,6 +143,12 @@ export function normalizeOcrPdfResult(
     needsOcr: p.provenance.source !== 'Native',
     ocrReason: undefined,
     textItems: itemsByPage.get(p.pageNumber - 1) ?? [],
+    ocrProvenance: {
+      source: p.provenance.source,
+      ocrConfidence: p.provenance.ocrConfidence,
+      hostedRecommended: p.provenance.hostedRecommended,
+      warnings: p.provenance.warnings,
+    },
   }));
 
   return {

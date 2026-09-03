@@ -355,6 +355,17 @@ export async function processPdfWithOcrFor(
   options: ProcessPdfWithOcrOptions = {},
 ): Promise<NormalizedPdfDocument> {
   const buffer = await loadBuffer(pdfPath);
+  return processPdfWithOcrBuffer(buffer, options);
+}
+
+/**
+ * In-memory variant of `processPdfWithOcrFor` for callers that already hold
+ * the PDF bytes (e.g. single-image-to-PDF wrapping without a temp file).
+ */
+export async function processPdfWithOcrBuffer(
+  buffer: Buffer,
+  options: ProcessPdfWithOcrOptions = {},
+): Promise<NormalizedPdfDocument> {
   const m = await native();
   try {
     const result: OcrPdfResult = await m.processPdfWithOcr(buffer, {

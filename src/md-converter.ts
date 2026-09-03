@@ -6,6 +6,7 @@ import { PdfConverter } from './pdf-converter.js';
 import { probePdf, PdfProbeResult } from './pdf-probe.js';
 import markdownit from 'markdown-it';
 import anchor from 'markdown-it-anchor';
+import { mermaidBundleSource, escapeInlineScript } from './mermaid-bundle.js';
 
 // ── Pattern constants ──────────────────────────────────────────────
 
@@ -14,7 +15,6 @@ const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s+/;
 const TOC_HEADING_RE = /^\s{0,3}#{2,6}\s+(?:目录|目錄|contents?|table of contents)\s*$/i;
 const TOC_ITEM_RE = /^\s*(?:[-*+]|\d+[.)])\s+\[[^\]]+\]\(#[^)]+\)\s*$/;
 const HR_RE = /^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/;
-const MERMAID_CDN = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
 
 /** Parse a CSS length string (mm/cm/in/pt/px) to CSS pixels. */
 function parseCssLen(val: string | undefined, def: string): number {
@@ -269,9 +269,9 @@ function renderMermaidBlocks(body: string): { body: string; count: number } {
 function buildMermaidJs(source: string, pdfContentW?: number, pdfContentH?: number): string {
   if (source === 'none') return '';
 
-  const loader = source === 'local'
-    ? '<script src="mermaid.min.js"></script>'
-    : `<script src="${MERMAID_CDN}"></script>`;
+  const bundled = mermaidBundleSource();
+  if (!bundled) return '';
+  const loader = `<script>${escapeInlineScript(bundled)}</script>`;
 
   // Embed PDF content dimensions so browser JS can use them
   const pdfW = pdfContentW ?? 0;
@@ -716,14 +716,10 @@ export class MdConverter {
       },
     );
 
-    // 8. Determine mermaid source
+    // 8. Determine mermaid source：启用时一律内置本地脚本（无 CDN 分支）
     let mermaidSource = 'none' as string;
     if (mermaidCount && options.mermaidSource !== 'none') {
-      if (options.mermaidSource === 'auto' || options.mermaidSource === undefined) {
-        mermaidSource = 'cdn';
-      } else {
-        mermaidSource = options.mermaidSource!;
-      }
+      mermaidSource = 'local';
     }
 
     // 9. Compute PDF content area for mermaid scaling (page minus margins)

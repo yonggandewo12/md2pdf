@@ -12,15 +12,14 @@
 - **完整 CSS/JS 支持** — Chart.js、Mermaid 等动态内容均可渲染
 - **丰富的 PDF 参数** — 页面尺寸、边距、缩放、页眉页脚、网络等待等
 - **图片自动嵌入** — 本地图片自动转为 base64 嵌入，单文件可离线分享
-- **Mermaid 图表** — Markdown 中的 Mermaid 代码块自动渲染
+- **Mermaid 图表** — Markdown 中的 Mermaid 代码块自动渲染（内置本地 mermaid.min.js，离线可用）
 - **侧边栏目录** — 层级嵌套、粘性定位，长文档导航无压力
 - **响应式表格** — 宽表可横向滚动，移动端友好
 - **交互增强** — 可选 JS 提供滚动进度条、目录高亮、返回顶部
 - **打印优化** — 专门的 `@media print` 样式
 - **浏览器实例复用** — 首次启动后后续转换只需 ~0.5-1s
-- **OCR 文字识别** — 基于百度智能云 OCR，支持图片、PDF、OFD 文字提取，25+ 种语言
+- **OCR 文字识别** — 完全本地（PP-OCRv6 Small 小模型，离线 CPU 运行，无需任何 API Key），支持图片与 PDF 文字提取
 - **PPT 生成** — 将 AI 生成的 SVG 幻灯片导出为原生可编辑 PPTX，支持动画与切换效果
-- **AI 图片生成** — 对接 18+ 后端（OpenAI、Gemini、Qwen、Agnes AI 等），支持文生图和图生图
 - **文档转 Markdown** — PDF、DOCX、Excel、PowerPoint、网页 → 结构化 Markdown
 - **Excel 操作** — 创建/读写工作簿、格式化、公式、合并、图表、透视汇总表、原生 Table、行列增删、数据验证（25 个工具，基于 openpyxl）
 - **DOCX 生成** — HTML/Markdown/纯文本 → 带样式的 Word 文档（基于 `docx` npm 包，纯 JS）
@@ -29,6 +28,16 @@
 - **PDF 操作** — 合并/拆分/提取/压缩/加密/解密（pdf-lib + PyMuPDF）
 - **PPTX 读取/编辑** — 读取已有 PPT 结构/文本/渲染图片，替换文字/表格/复制页/加备注/设转场（python-pptx + template_fill_pptx）
 - **图片处理** — 格式转换/缩放/压缩/旋转/裁切/水印（基于 Pillow）
+
+---
+
+## Breaking Changes（纯本地化改造）
+
+本项目已转型为**纯本地实现**，不依赖任何第三方云服务：
+
+- **`recognize_text` 改为本地 OCR**：移除 `apiKey`/`secretKey`/`languageType`/`detectLanguage`/`detectDirection`/`paragraph`/`probability`/`multidirectionalRecognize`/`ofdPath`/`ofdFileNum`/`pdfFileNum` 参数（不再支持 OFD 与 25+ 语言，仅中英文）；输出结构改为 `text` + `pages[]`（含逐页来源与置信度）。
+- **`generate_image` 工具已移除**：AI 图片生成依赖云服务，与纯本地定位冲突。
+- **Mermaid 渲染离线化**：`convert_md_to_html`/`convert_md_to_pdf` 的 `mermaidSource` 参数收敛为 `auto`（内置本地脚本）/`none`，不再提供 `cdn`/`local` 选项。
 
 ---
 
@@ -111,7 +120,7 @@ python3.12 -m pip install --break-system-packages -r scripts/docx/requirements.t
 **方式 A — CLI 一键添加（推荐）：**
 
 ```bash
-# 基础配置（所有 10 个工具可用，但不含 OCR / AI 图片）
+# 基础配置（全部工具开箱即用；本地 OCR 首次使用前见「本地 OCR 部署」小节）
 claude mcp add general-tools \
   -- node /Users/xuliang/Documents/project/general-tools/dist/index.js
 ```
@@ -182,47 +191,26 @@ ldd --version | head -1   # → ldd (Ubuntu GLIBC 2.35-0ubuntu3) 2.35
 
 若低于 2.31（如 CentOS 7、Debian 10），安装系统 Python 3.10+ 并设置 `PPT_MASTER_PYTHON` 环境变量。
 
-### 第四步（可选）：配置扩展功能的环境变量
+### 第四步（可选）：本地 OCR 部署
 
-某些功能需要第三方服务的 API Key。以下均为**可选**，不配置不影响其他工具。
+本项目的 OCR 完全本地化，**不需要任何 API Key**。纯文本 PDF 与日常转换零依赖、开箱即用；仅当需要对**扫描版 PDF / 图片**做本地 OCR 时，需一次性准备 OCR 运行时：
+
+| 组件 | 说明 | 获取方式 |
+|------|------|---------|
+| **模型集**（约 31 MB） | PP-OCRv6 Small（检测 + 识别 + 字典，Apache-2.0） | **自动**：首个被 OCR 的页面触发下载并 SHA-256 校验，缓存于平台缓存目录（可用 `PDF_INSPECTOR_MODEL_CACHE` 指定根目录） |
+| **PDFium 共享库** | 页面渲染为位图（native-v7988） | [firecrawl/pdfium-rs releases](https://github.com/firecrawl/pdfium-rs/releases/tag/native-v7988)，按平台下载 `firecrawl-pdfium-<platform>.tgz` |
+| **ONNX Runtime 1.27.0** | CPU 推理运行时 | [microsoft/onnxruntime releases](https://github.com/microsoft/onnxruntime/releases/tag/v1.27.0)，按平台下载 |
+
+下载后通过环境变量指向解压出的共享库：
 
 ```bash
-# 完整配置版（按需添加 -e 参数）
-claude mcp add general-tools \
-  -e BAIDU_OCR_API_KEY=你的百度OCRKey \
-  -e BAIDU_OCR_SECRET_KEY=你的百度OCRSecret \
-  -e IMAGE_BACKEND=gemini \
-  -e GEMINI_API_KEY=你的GeminiKey \
-  -- node /Users/xuliang/Documents/project/general-tools/dist/index.js
+export PDFIUM_LIB_PATH=/absolute/path/to/libpdfium.dylib      # Windows: pdfium.dll
+export ORT_DYLIB_PATH=/absolute/path/to/libonnxruntime.dylib  # Windows: onnxruntime.dll
 ```
 
-**各功能的环境变量说明：**
+**平台支持：** macOS Apple Silicon 与 Linux x64 已实测全链路；Linux ARM64 资产齐备；Windows 为官方 preview 状态。OCR 运行时缺失时工具**不会失败**——`extract_pdf_text`/`convert_to_markdown` 自动回退原生提取并附 warning，server 启动不受任何影响。
 
-| 功能 | 涉及工具 | 需要配置的变量 | 如何获取 |
-|------|---------|---------------|---------|
-| **OCR 文字识别** | `recognize_text` | `BAIDU_OCR_API_KEY` + `BAIDU_OCR_SECRET_KEY` | [百度智能云](https://console.bce.baidu.com/ai/#/ai/ocr/overview/index) 创建应用 |
-| **AI 图片生成** | `generate_image` | `IMAGE_BACKEND` + 对应后端 API Key（见下方） | 选择一家服务商 |
-| **PDF OCR 路由** | `extract_pdf_text` / `convert_to_markdown` (PDF) | `PDFIUM_LIB_PATH` + `ORT_DYLIB_PATH`（仅扫描型 PDF 需 OCR 时） | 默认走纯文本提取，扫描型 PDF 文本不可靠时才启用 |
-| **Python 路径**（可选） | `generate_presentation` / `excel_*` / `docx_edit_*` / `docx_insert_*` / `convert_to_markdown`（HTML/IPYNB/Web/Office-fallback） | `PPT_MASTER_PYTHON`（默认用嵌入 Python；设置后改用主机 Python） | 仅当嵌入 Python 出问题时回退到系统 Python |
-
-**AI 图片生成后端选择（`IMAGE_BACKEND` + 对应 Key）：**
-
-| 后端 | 推荐模型 | 需额外配置 | 备注 |
-|------|---------|-----------|------|
-| `openai` | gpt-image-2 | `OPENAI_API_KEY=sk-xxx` | [OpenAI](https://platform.openai.com/api-keys)，付费 |
-| `gemini` | gemini-3.1-flash-image-preview | `GEMINI_API_KEY=xxx` | [Google AI Studio](https://aistudio.google.com/apikey)，免费额度 |
-| `qwen` | qwen-image-2.0-pro | `QWEN_API_KEY=xxx` | 阿里通义万相 |
-| `zhipu` | glm-image | `ZHIPU_API_KEY=xxx` | 智谱 GLM |
-| `volcengine` | doubao-seedream | `VOLCENGINE_API_KEY=xxx` | 火山引擎 |
-| `agnes` | agnes-image-2.1-flash | `AGNES_API_KEY=xxx` | Agnes AI，支持图生图 |
-
-例如使用 Gemini（免费）：
-```bash
-claude mcp add general-tools \
-  -e IMAGE_BACKEND=gemini \
-  -e GEMINI_API_KEY=你的GoogleAPIKey \
-  -- node /Users/xuliang/Documents/project/general-tools/dist/index.js
-```
+**离线环境：** 预先填好模型目录后设 `PDF_INSPECTOR_MODEL_CACHE`，或使用工具的 offline 选项禁止网络访问。
 
 ### 验证安装
 
@@ -234,7 +222,7 @@ claude mcp add general-tools \
 
 ```
 claude mcp list
-# 应看到: generate_presentation, generate_image, convert_to_markdown 等 10 个工具
+# 应看到: classify_pdf, extract_pdf_text, recognize_text, convert_to_markdown 等 71 个工具
 ```
 
 ### 卸载
@@ -346,60 +334,45 @@ Claude，把 README.md 转成 PDF，A4 格式，带交互导航
 
 ### 工具 5：`recognize_text`
 
-基于百度智能云 OCR API，从图片、PDF 或 OFD 文件中提取文字，支持中英文及多种语言。
+**完全本地**的文字识别（PP-OCRv6 Small，离线 CPU 运行，无需 API Key）：从图片（PNG/JPEG）或 PDF 中提取中英文文字。图片自动包装为单页 PDF 后 OCR；文本型 PDF 直接返回原生文本（零 OCR 开销）。
 
 ```
 Claude，识别 /path/to/image.png 中的文字
-Claude，识别 /path/to/document.pdf 第2页的文字
-Claude，识别 /path/to/doc.ofd 中的文字
+Claude，识别 /path/to/scanned.pdf 全部页的文字
 ```
 
 **参数：**
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `imagePath` | string | 本地图片文件路径（图片三选一） | - |
-| `imageUrl` | string | 网络图片 URL（图片三选一） | - |
-| `imageBase64` | string | Base64 编码图片数据（图片三选一） | - |
+| `imagePath` | string | 本地图片文件路径，PNG/JPEG（四选一） | - |
+| `imageUrl` | string | 网络图片 URL，PNG/JPEG | - |
+| `imageBase64` | string | Base64 编码图片数据（支持 data URI） | - |
 | `pdfPath` | string | 本地 PDF 文件路径 | - |
-| `pdfFileNum` | number | PDF 识别页码，从 1 开始 | 1 |
-| `ofdPath` | string | 本地 OFD 文件路径 | - |
-| `ofdFileNum` | number | OFD 识别页码，从 1 开始 | 1 |
-| `apiKey` | string | 百度智能云 API Key（可选，优先读环境变量 `BAIDU_OCR_API_KEY`） | - |
-| `secretKey` | string | 百度智能云 Secret Key（可选，优先读环境变量 `BAIDU_OCR_SECRET_KEY`） | - |
-| `languageType` | enum | 识别语言类型（见下表） | CHN_ENG |
-| `detectLanguage` | boolean | 检测图片中的语言 | true |
-| `detectDirection` | boolean | 检测图像朝向 | false |
-| `paragraph` | boolean | 输出段落信息 | false |
-| `probability` | boolean | 返回每行置信度分数 | true |
-| `multidirectionalRecognize` | boolean | 行级别多方向文字识别（图内有不同方向文字时建议开启） | false |
+| `targetPages` | string | PDF 页码范围，如 "1-5,10"（仅 pdfPath 时有效） | 全部页 |
+| `dpi` | number | OCR 渲染分辨率 | 150 |
 
-> **输入优先级：** `image > url > pdf_file > ofd_file`，当 image/url 字段存在时，pdf_file/ofd_file 字段失效。
-
-**`languageType` 可选值：**
-
-| 值 | 语言 | 值 | 语言 |
-|----|------|----|------|
-| `auto_detect` | 自动检测 | `CHN_ENG` | 中英文混合 |
-| `ENG` | 英文 | `JAP` | 日语 |
-| `KOR` | 韩语 | `FRE` | 法语 |
-| `SPA` | 西班牙语 | `POR` | 葡萄牙语 |
-| `GER` | 德语 | `ITA` | 意大利语 |
-| `RUS` | 俄语 | `DAN` | 丹麦语 |
-| `DUT` | 荷兰语 | `MAL` | 马来语 |
-| `SWE` | 瑞典语 | `IND` | 印尼语 |
-| `POL` | 波兰语 | `ROM` | 罗马尼亚语 |
-| `TUR` | 土耳其语 | `GRE` | 希腊语 |
-| `HUN` | 匈牙利语 | `THA` | 泰语 |
-| `VIE` | 越南语 | `ARA` | 阿拉伯语 |
-| `HIN` | 印地语 | | |
-
-> **认证方式：** 优先使用工具参数 `apiKey`/`secretKey`，未提供时从环境变量 `BAIDU_OCR_API_KEY`/`BAIDU_OCR_SECRET_KEY` 读取。MCP 配置时可通过 `--env` 传入：
-> ```bash
-> claude mcp add --env BAIDU_OCR_API_KEY=<你的Key> --env BAIDU_OCR_SECRET_KEY=<你的Secret> ...
-> ```
+> **输入优先级：** `image > url > base64 > pdf`。
 >
-> **识别策略：** 优先调用高精度接口 `accurate_basic`，失败时自动降级到 `general_basic`。
+> **输出：** `text`（全部文本，多页带 `[Page N]` 分隔）+ `pages[]`（逐页 `source`/`ocrConfidence`/`warnings` 来源信息）。
+>
+> **依赖：** OCR 运行时见「本地 OCR 部署」小节；运行时缺失时返回明确错误与安装指引（不影响其他工具）。
+
+### 工具 5.5：`classify_pdf`
+
+快速分类 PDF（约 10-50ms 采样式，不解析全文）：返回 `pdfType`（TextBased/Scanned/ImageBased/Mixed）、`pageCount`、`confidence`、`pagesNeedingOcr`（1-indexed）。用于在 `extract_pdf_text` 之前决定提取策略（如 Scanned → `ocr="auto"`）。
+
+```
+Claude，先看看 /path/to/doc.pdf 是文本型还是扫描型
+```
+
+### 工具 5.6：`extract_pdf_text`
+
+布局感知的 PDF 文本提取（text/json/markdown 三模式，检测标题/表格/列表/阅读顺序）。扫描页默认仅标记；`ocr="auto"` 时仅对质量信号判定需要 OCR 的页本地 OCR（纯文本 PDF 零开销），`ocr="force"` 全页强制。OCR 运行时缺失时自动回退原生文本并附 warning。
+
+```
+Claude，把 /path/to/scanned.pdf 的文字提出来（ocr 用 auto）
+```
 
 ### 工具 6：`generate_presentation`
 
@@ -435,38 +408,7 @@ Claude，把已有的项目 /path/to/project 导出为 PPTX
 | `animation` | string | 逐元素进入动画，如 auto | - |
 | `timeout` | number | 超时(ms) | 120000 |
 
-### 工具 7：`generate_image`
-
-基于 AI 图片生成后端（通过环境变量配置），从文字提示生成图片。支持 18+ 后端：OpenAI、Gemini、Qwen、Zhipu、Volcengine、Agnes AI、Stability、BFL 等。Agnes AI 后端额外支持图生图（image-to-image）模式。
-
-```
-Claude，生成一张"日落海滩"的图片，16:9 比例
-```
-
-**环境变量配置示例（MCP 配置时传入）：**
-
-```bash
-claude mcp add --transport stdio \
-  --env IMAGE_BACKEND=openai \
-  --env OPENAI_API_KEY=sk-xxx \
-  --scope user general-tools -- node $(pwd)/dist/index.js
-```
-
-**参数：**
-
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `prompt` | string (必填) | 图片生成提示词 | - |
-| `aspectRatio` | string | 宽高比 | 16:9 |
-| `imageSize` | string | 图片尺寸 (512px/1K/2K/4K) | 1K |
-| `backend` | string | 后端覆盖，如 openai/gemini/agnes | 环境变量 IMAGE_BACKEND |
-| `outputDir` | string | 输出目录 | cwd |
-| `filename` | string | 输出文件名（不含扩展名） | 自动生成 |
-| `model` | string | 模型覆盖 | 后端默认模型 |
-| `referenceImage` | string | 参考图片 URL（图生图，Agnes AI 后端支持） | - |
-| `timeout` | number | 超时(ms) | 120000 |
-
-### 工具 8：`convert_to_markdown`
+### 工具 7：`convert_to_markdown`
 
 将 PDF、Word（docx/doc/odt/rtf/epub）、Excel（xlsx/xls/xlsb/ods/csv）、PowerPoint（pptx/ppt/odp）、网页 URL 等转换为 Markdown 格式。自动根据文件扩展名或 URL 检测源类型。
 
@@ -485,6 +427,7 @@ Claude，把 https://example.com 转为 Markdown
 | `maxRows` | number | Excel 每表最大行数（指定时该转换走 Python 子进程截断） | 无限制 |
 | `maxCols` | number | Excel 每表最大列数（指定时该转换走 Python 子进程截断） | 无限制 |
 | `pdfImages` | enum | PDF 图片提取 (all/filtered/none) | filtered |
+| `pdfOcr` | enum | PDF 扫描页处理 (off/auto/force)：auto 仅对质量信号判定需 OCR 的页本地 OCR（纯文本 PDF 零开销），force 全页强制，off 仅原生提取 | auto |
 | `renderVectorFigures` | boolean | 渲染 PDF 矢量图为 PNG | false |
 | `vectorFigureDpi` | number | 矢量图渲染 DPI | 150 |
 
@@ -495,7 +438,7 @@ Claude，把 https://example.com 转为 Markdown
 > - `.potx/.potm`（PowerPoint 模板）不受支持，请先另存为 `.pptx`。
 > - 指定 `maxRows`/`maxCols` 会回退 Python `excel_to_md.py`（保留行/列截断语义）。
 
-### 工具 9–33：Excel 操作（`excel_*`）
+### 工具 8–32：Excel 操作（`excel_*`）
 
 25 个工具，基于 openpyxl（Python 子进程）的完整 Excel 操作能力。所有工具以 `excel_` 前缀，`filepath` 接受绝对或相对路径。
 
@@ -522,7 +465,7 @@ Claude，把 https://example.com 转为 Markdown
 > **依赖**：openpyxl 已嵌入运行时，无需手动安装。Python 路径默认用嵌入 Python；可用 `PPT_MASTER_PYTHON` 改用系统 Python。
 | `timeout` | number | 超时(ms) | 120000 |
 
-### 工具 34–46：DOCX / PDF 后处理（`docx_*` / `pdf_*`）
+### 工具 33–45：DOCX / PDF 后处理（`docx_*` / `pdf_*`）
 
 13 个工具，分三组能力：
 
@@ -556,7 +499,7 @@ Claude，把 https://example.com 转为 Markdown
 
 > **依赖**：python-docx 已嵌入运行时（`scripts/build-platform-package.py` 打包），无需手动安装；`docx`/`pdf-lib` 为 npm dependencies，随主包分发。
 
-### 工具 47–52：PDF 操作（`pdf_*`）
+### 工具 46–51：PDF 操作（`pdf_*`）
 
 6 个工具，页级 PDF 操作。合并/拆分/提取/压缩为纯 JS（pdf-lib），加密/解密走 PyMuPDF（已嵌入运行时）。
 
@@ -571,7 +514,7 @@ Claude，把 https://example.com 转为 Markdown
 
 > **依赖**：加密/解密需 PyMuPDF（`fitz`/`pymupdf`），已嵌入运行时；其余纯 JS 零依赖。
 
-### 工具 53–62：PPTX 读取/编辑（`pptx_*`）
+### 工具 52–61：PPTX 读取/编辑（`pptx_*`）
 
 10 个工具，读取与编辑已有 PowerPoint（python-pptx + template_fill_pptx，均已嵌入运行时）。与 `generate_presentation`（从 SVG 生成新 PPT）互补。
 
@@ -590,7 +533,7 @@ Claude，把 https://example.com 转为 Markdown
 
 > **转场契约**：编辑类工具（`pptx_replace_text` / `pptx_replace_table_cells` / `pptx_duplicate_slide` / `pptx_add_notes`）**保留**源文件的转场设置，不会改动页面切换效果；`pptx_set_transitions` 仅设置目标页（`slides` 未指定时作用于全部页），未指定的页保留源转场。仅 `pptx_apply_plan` 默认注入 `fade` 转场（可通过 `transition` 参数覆盖，`transition: null` 表示保留源转场）。
 
-### 工具 63–69：图片处理（`image_*`）
+### 工具 62–68：图片处理（`image_*`）
 
 7 个工具，本地图片处理（Pillow，已嵌入运行时）。
 
@@ -613,7 +556,7 @@ general-tools/
 ├── src/
 │   ├── index.ts              # MCP 服务入口（工具注册、请求处理）
 │   ├── md-converter.ts       # Markdown → HTML 渲染管线
-│   ├── ocr-service.ts        # 百度 OCR 文字识别服务
+│   ├── local-ocr-service.ts  # 本地 OCR 服务（PP-OCRv6，图片→单页 PDF→选择性 OCR）
 │   ├── pdf-converter.ts      # Puppeteer PDF 转换核心
 │   ├── pdf-extractor.ts      # LiteParse PDF 文本/截图提取
 │   ├── pdf-postprocess.ts    # PDF 水印/二维码（pdf-lib）
@@ -710,14 +653,13 @@ fc-cache -fv
 - **浏览器实例池**：单例模式，首次调用时启动 Chrome，后续复用
 - **错误处理**：文件校验、超时控制、崩溃恢复、资源清理
 - **图片嵌入**：根据 Markdown 所在目录解析相对路径，转为 data:image URI
-- **Mermaid**：检测到代码块时自动加载 CDN JS 并渲染；DOCX 转换时经无头浏览器渲染为 PNG 图片嵌入（先用 curl 下载 mermaid.min.js 到 home 缓存目录再注入以避开 headless 代理超时，curl 不可用时回退 Node fetch；渲染失败降级为源码文本，不中断转换）
-- **OCR 服务**：
-  - 输入优先级：image > url > pdf_file > ofd_file
-  - 支持 PDF/OFD 文件识别，可指定页码
-  - 支持 25+ 种语言识别
-  - Token 缓存：access_token 有效期 30 天，提前 1 天自动刷新
-  - 降级策略：高精度接口失败时自动降级到通用接口
-  - 错误映射：百度 OCR 错误码自动翻译为中文提示
+- **Mermaid**：内置 npm 依赖 mermaid@10 的本地 mermaid.min.js，检测到代码块时离线渲染（md→HTML 内联脚本、md→PDF/DOCX 经无头浏览器 addScriptTag 注入；内置文件缺失时降级为源码文本，不中断转换）
+- **本地 OCR（PP-OCRv6 Small）**：
+  - 完全离线：模型约 31 MB（检测 + 识别 + 字典），首个被 OCR 的页面触发下载并 SHA-256 校验，之后走缓存
+  - 分类路由先行：纯文本 PDF 的 Auto 请求不加载 PDFium/ONNX、不下载模型、不访问网络
+  - 输入优先级：image > url > base64 > pdf；图片包装为单页 PDF 后内存直调（无临时文件）
+  - OCR 运行时缺失/模型获取失败 → 回退原生提取并附 warning，server 启动与纯文本路径不受任何影响
+  - 逐页 provenance：source（Native/Ocr/Fused）、置信度、hostedRecommended（OCR 后仍不完整的页）
 
 ---
 
