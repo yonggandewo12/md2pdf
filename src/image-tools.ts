@@ -13,6 +13,9 @@ export const IMAGE_ACTION_MAP: Record<string, string> = {
   image_rotate: 'rotate',
   image_crop: 'crop',
   image_watermark: 'watermark',
+  image_gif: 'gif',
+  image_quantize: 'quantize',
+  image_edit_exif: 'edit_exif',
 };
 
 const imagePathProp = {
@@ -133,6 +136,60 @@ export const IMAGE_TOOLS: Tool[] = [
         color: { type: 'string', description: 'Text hex color (default: #FFFFFF)' },
         margin: { type: 'number', description: 'Margin from edges in pixels (default: 16)' },
         fontPath: { type: 'string', description: 'Custom TTF/OTF font path (default: auto-detect CJK font)' },
+      },
+      required: ['imagePath', 'outputPath'],
+    },
+  },
+  {
+    name: 'image_gif',
+    description:
+      'Compose multiple images into an animated GIF. Frames follow the input order; transparency is preserved.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        imagePaths: { type: 'array', items: { type: 'string' }, description: 'Frame image paths in order (required)' },
+        outputPath: { type: 'string', description: 'Output .gif file path (required)' },
+        duration: { type: 'number', description: 'Milliseconds per frame (default: 500)' },
+        loop: { type: 'number', description: 'Loop count; 0 means infinite (default: 0)' },
+      },
+      required: ['imagePaths', 'outputPath'],
+    },
+  },
+  {
+    name: 'image_quantize',
+    description:
+      'Reduce the color palette of an image (color quantization) to shrink file size. Output format follows the output extension.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        imagePath: imagePathProp,
+        outputPath: outputPathProp,
+        colors: { type: 'number', description: 'Palette size 2-256 (default: 256)' },
+        method: {
+          type: 'string',
+          enum: ['mediancut', 'maxcoverage', 'fastoctree', 'libimagequant'],
+          description: 'Quantization method (default: Pillow auto)',
+        },
+      },
+      required: ['imagePath', 'outputPath'],
+    },
+  },
+  {
+    name: 'image_edit_exif',
+    description:
+      'Read, edit, or strip EXIF metadata of a JPEG/TIFF/WebP image. Without exif and strip: returns current EXIF. With exif: writes given tags. With strip: removes all EXIF. PNG is not supported.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        imagePath: imagePathProp,
+        outputPath: outputPathProp,
+        exif: {
+          type: 'object',
+          additionalProperties: true,
+          description:
+            'Tags to write: keys are tag names (make/model/orientation/dateTime/artist/copyright/software/imageDescription) or numeric tag ids; values are string/number',
+        },
+        strip: { type: 'boolean', description: 'Remove all EXIF metadata (default: false)' },
       },
       required: ['imagePath', 'outputPath'],
     },

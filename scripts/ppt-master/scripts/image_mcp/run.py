@@ -44,6 +44,9 @@ ACTIONS: dict[str, Callable[..., Any]] = {
     "rotate": ops.image_rotate,
     "crop": ops.image_crop,
     "watermark": ops.image_watermark,
+    "gif": ops.image_gif,
+    "quantize": ops.image_quantize,
+    "edit_exif": ops.image_edit_exif,
 }
 
 

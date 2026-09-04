@@ -25,9 +25,15 @@
 - **DOCX 生成** — HTML/Markdown/纯文本 → 带样式的 Word 文档（基于 `docx` npm 包，纯 JS）
 - **DOCX 编辑** — 打开已有 .docx 改段落/插图片/插表格/改样式/读结构（基于 python-docx，已嵌入运行时）
 - **PDF 后处理** — 给 PDF 加文字/图片水印、嵌入二维码（基于 pdf-lib，纯 JS）
+- **PDF 表单填充** — 读取/填充 AcroForm 表单字段（文本/复选框/单选/下拉），支持中文（自动嵌入系统中文字体），可扁平化
 - **PDF 操作** — 合并/拆分/提取/压缩/加密/解密（pdf-lib + PyMuPDF）
+- **ePub 电子书** — Markdown → EPUB（可按 h1 分章、相对路径图片嵌入 epub 包，纯 JS）
+- **二维码生成** — 文本 → PNG/SVG/DataURL（含中文，纯 JS），与 pdf_add_qrcode 闭环
+- **归档压缩/解压** — 文件/目录 → zip/tar 打包、zip 解压（fflate 纯 JS，防路径穿越）
+- **SQLite 数据库** — 查询/执行 DDL/DML/列结构（better-sqlite3，预编译二进制）
+- **公式 OCR** — 图片 → LaTeX 数学公式（RapidLaTeXOCR ONNX 模型，完全本地 CPU 推理，首次自动下载模型约 180MB）
 - **PPTX 读取/编辑** — 读取已有 PPT 结构/文本/渲染图片，替换文字/表格/复制页/加备注/设转场（python-pptx + template_fill_pptx）
-- **图片处理** — 格式转换/缩放/压缩/旋转/裁切/水印（基于 Pillow）
+- **图片处理** — 格式转换/缩放/压缩/旋转/裁切/水印/GIF 动图合成/颜色量化/EXIF 读取编辑剥离（基于 Pillow）
 
 ---
 
@@ -145,7 +151,7 @@ claude mcp add general-tools \
 > - **Claude Code（项目级）：** `.claude.json`
 > - **Claude Desktop：** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-配置后重启 Claude Code，执行 `claude mcp list` 应看到 71 个工具（10 个通用 + 25 个 Excel + 13 个 DOCX/PDF + 6 个 PDF 操作 + 10 个 PPTX 编辑 + 7 个图片处理）。
+配置后重启 Claude Code，执行 `claude mcp list` 应看到 83 个工具（10 个通用 + 25 个 Excel + 13 个 DOCX/PDF + 6 个 PDF 操作 + 10 个 PPTX 编辑 + 10 个图片处理 + 9 个补充工具：表单填充/ePub/二维码/归档×2/SQLite×3/公式 OCR）。
 
 ### 平台支持与首次运行提示
 
@@ -224,7 +230,7 @@ export ORT_DYLIB_PATH=/absolute/path/to/libonnxruntime.dylib  # Windows: onnxrun
 
 ```
 claude mcp list
-# 应看到: classify_pdf, extract_pdf_text, recognize_text, convert_to_markdown 等 71 个工具
+# 应看到: classify_pdf, extract_pdf_text, recognize_text, convert_to_markdown 等 83 个工具
 ```
 
 ### 卸载
@@ -535,9 +541,9 @@ Claude，把 https://example.com 转为 Markdown
 
 > **转场契约**：编辑类工具（`pptx_replace_text` / `pptx_replace_table_cells` / `pptx_duplicate_slide` / `pptx_add_notes`）**保留**源文件的转场设置，不会改动页面切换效果；`pptx_set_transitions` 仅设置目标页（`slides` 未指定时作用于全部页），未指定的页保留源转场。仅 `pptx_apply_plan` 默认注入 `fade` 转场（可通过 `transition` 参数覆盖，`transition: null` 表示保留源转场）。
 
-### 工具 62–68：图片处理（`image_*`）
+### 工具 62–71：图片处理（`image_*`）
 
-7 个工具，本地图片处理（Pillow，已嵌入运行时）。
+10 个工具，本地图片处理（Pillow，已嵌入运行时）。
 
 | 工具 | 说明 |
 |------|------|
@@ -548,6 +554,27 @@ Claude，把 https://example.com 转为 Markdown
 | `image_rotate` | 任意角度旋转（`degrees` 可选，省略或 0 时仅做 EXIF 方向矫正） |
 | `image_crop` | 像素坐标裁切 |
 | `image_watermark` | 文字/图片水印（6 锚点 + tile 平铺，CJK 字体自动选择） |
+| `image_gif` | 多帧图片合成 GIF 动图（帧序、每帧毫秒、循环次数，透明度保留） |
+| `image_quantize` | 颜色量化（调色板 2-256 色，4 种方法，缩小文件体积） |
+| `image_edit_exif` | EXIF 读取/写入/剥离（JPEG/TIFF/WebP；tag 名或数字 id） |
+
+### 工具 72–80：补充工具（`pdf_fill_form` / `md_to_epub` / `qrcode_generate` / `archive_*` / `sqlite_*` / `formula_ocr`）
+
+9 个工具，均为纯本地实现。
+
+| 工具 | 说明 |
+|------|------|
+| `pdf_fill_form` | 读取或填充 PDF AcroForm 表单（text/checkbox/radio/dropdown/optionlist；不传 `fields` 仅列出字段）；中文值自动嵌入系统中文字体（macOS Arial Unicode / Windows SimHei / Linux DroidSansFallback）；`flatten` 可选扁平化 |
+| `md_to_epub` | Markdown → EPUB 电子书（`splitByHeading` 按 h1 分章，相对路径图片嵌入 epub 包，可选 EPUB 2/3、封面、作者、出版方） |
+| `qrcode_generate` | 文本 → 二维码 PNG/SVG/DataURL（UTF-8 含中文；宽度/容错等级/边距/前景背景色可配） |
+| `archive_compress` | 文件/目录 → zip（0-9 级压缩）或 tar（ustar 打包），目录递归、相对路径保留 |
+| `archive_extract` | zip 解压到目录（`../` 与绝对路径条目自动丢弃，防路径穿越） |
+| `sqlite_query` | SQLite SELECT（参数化绑定，BigInt/Buffer 自动 JSON 化） |
+| `sqlite_exec` | SQLite 写操作与 DDL（返回 changes/lastInsertRowid；数据库不存在时自动创建） |
+| `sqlite_tables` | 列出用户表与建表语句 |
+| `formula_ocr` | 图片 → LaTeX 公式（本地 ONNX CPU 推理，RapidLaTeXOCR 模型首次自动下载约 180MB 至 `~/.cache/general-tools-mcp/formula-ocr/`，可用 `FORMULA_OCR_MODEL_DIR` 覆盖；温度 1e-5 下输出确定） |
+
+> **依赖**：`pdf_fill_form`/`qrcode_generate`/`archive_*`/`md_to_epub` 为纯 JS（pdf-lib、qrcode、fflate、epub-gen）；`sqlite_*` 基于 better-sqlite3（npm 预编译二进制，覆盖 macOS/Linux/Windows 主流平台）；`formula_ocr` 复用 onnxruntime-node + jimp（纯 JS 图像解码）。
 
 ---
 
@@ -569,6 +596,13 @@ general-tools/
 │   ├── ppt-tools.ts          # PPTX 读取/编辑工具 schema 与 action 映射
 │   ├── image-service.ts      # 图片处理（Pillow 子进程）
 │   ├── image-tools.ts        # 图片处理工具 schema 与 action 映射
+│   ├── pdf-form-service.ts   # PDF 表单读取/填充（pdf-lib，中文自动嵌入字体）
+│   ├── epub-service.ts       # Markdown → EPUB（epub-gen + markdown-it）
+│   ├── qrcode-service.ts     # 二维码生成（qrcode 纯 JS）
+│   ├── archive-service.ts    # zip 压缩解压 + ustar tar 打包（fflate）
+│   ├── sqlite-service.ts     # SQLite 查询/执行（better-sqlite3，惰性加载）
+│   ├── formula-ocr-service.ts# 公式 OCR（RapidLaTeXOCR ONNX + onnxruntime-node + jimp）
+│   ├── extra-tools.ts        # 补充工具 schema（表单/ePub/二维码/归档/SQLite/公式 OCR）
 │   ├── html-to-docx.ts       # HTML → DOCX 转换器（docx npm 包）
 │   ├── docx-service.ts       # DOCX 生成（纯 JS）+ 编辑（python-docx 子进程）
 │   ├── docx-tools.ts         # DOCX/PDF 工具 schema 与 action 映射

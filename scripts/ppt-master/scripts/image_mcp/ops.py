@@ -346,3 +346,187 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     except Exception:
         pass
     return 255, 255, 255
+
+
+def image_gif(
+    imagePaths: list[str],
+    outputPath: str,
+    duration: int = 500,
+    loop: int = 0,
+) -> dict[str, Any]:
+    """多帧图片合成 GIF 动图。duration 为每帧毫秒，loop 0 表示无限循环。"""
+    if not imagePaths or not isinstance(imagePaths, list):
+        raise ValueError("imagePaths must be a non-empty list")
+
+    out = _resolve_path(outputPath)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    frames: list[Image.Image] = []
+    opened: list[Image.Image] = []
+    try:
+        for p in imagePaths:
+            img = _open(_resolve_path(p)).convert("RGBA")
+            opened.append(img)
+            # 网络编码统一转 P 模式（GIF 调色板），透明色映射到索引 255
+            alpha = img.getchannel("A")
+            frame = img.convert("RGB").convert(
+                "P", palette=Image.Palette.ADAPTIVE, colors=255
+            )
+            frame.paste(255, mask=alpha.point(lambda a: 255 if a < 128 else 0))
+            frames.append(frame)
+        frames[0].save(
+            out,
+            format="GIF",
+            save_all=True,
+            append_images=frames[1:],
+            duration=int(duration),
+            loop=int(loop),
+            transparency=255,
+            disposal=2,
+        )
+    finally:
+        for img in opened:
+            img.close()
+
+    return {
+        "outputPath": str(out),
+        "frames": len(frames),
+        "fileSize": out.stat().st_size,
+    }
+
+
+def image_quantize(
+    imagePath: str,
+    outputPath: str,
+    colors: int = 256,
+    method: str | None = None,
+) -> dict[str, Any]:
+    """颜色量化（减少调色板颜色数）。method: mediancut/maxcoverage/fastoctree/libimagequant。"""
+    p = _resolve_path(imagePath)
+    out = _resolve_path(outputPath)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    input_size = p.stat().st_size
+
+    method_map = {
+        "mediancut": Image.Quantize.MEDIANCUT,
+        "maxcoverage": Image.Quantize.MAXCOVERAGE,
+        "fastoctree": Image.Quantize.FASTOCTREE,
+        "libimagequant": Image.Quantize.LIBIMAGEQUANT,
+    }
+    kwargs: dict[str, Any] = {"colors": max(2, min(int(colors), 256))}
+    if method:
+        if method not in method_map:
+            raise ValueError(f"Unknown quantize method: {method} (available: {sorted(method_map)})")
+        kwargs["method"] = method_map[method]
+
+    img = _open(p)
+    try:
+        src_mode = img.mode
+        has_alpha = src_mode in ("RGBA", "LA") or (src_mode == "P" and "transparency" in img.info)
+        # Pillow 限制：MEDIANCUT/MAXCOVERAGE 不接受 RGBA 输入。这两种方法下
+        # 透明区域先合成到白底再转 RGB；其余方法（含默认自动选择）保留 RGBA。
+        method_id = kwargs.get("method")
+        if method_id in (Image.Quantize.MEDIANCUT, Image.Quantize.MAXCOVERAGE):
+            if has_alpha:
+                rgba = img.convert("RGBA")
+                base = Image.new("RGB", rgba.size, (255, 255, 255))
+                base.paste(rgba, mask=rgba.getchannel("A"))
+            else:
+                base = img.convert("RGB")
+        else:
+            base = img.convert("RGBA")
+        quantized = base.quantize(**kwargs)
+        target = _target_format(out, "PNG")
+        # 目标格式不接受调色板时先转回 RGB
+        if target == "JPEG":
+            quantized = quantized.convert("RGB")
+        quantized.save(out, format=target)
+        output_size = out.stat().st_size
+        return {
+            "outputPath": str(out),
+            "colors": kwargs["colors"],
+            "mode": f"{src_mode} → P",
+            "inputSize": input_size,
+            "outputSize": output_size,
+            "ratio": round(output_size / input_size, 3) if input_size else 1.0,
+        }
+    finally:
+        img.close()
+
+
+# IFD0 级常用 EXIF 标签名 → tag id（写入用；其余 tag 直接用数字）
+# 键统一小写：查找方先对用户输入 key.lower()，两处大小写必须一致
+_EXIF_TAG_NAMES = {
+    "imagedescription": 270,
+    "make": 271,
+    "model": 272,
+    "orientation": 274,
+    "software": 305,
+    "datetime": 306,
+    "artist": 315,
+    "copyright": 33432,
+}
+
+
+def image_edit_exif(
+    imagePath: str,
+    outputPath: str,
+    exif: dict[str, Any] | None = None,
+    strip: bool = False,
+) -> dict[str, Any]:
+    """读取/编辑/剥离 EXIF。
+
+    - 不传 exif 且不传 strip：读取当前 EXIF（含 Exif IFD）；
+    - exif：写入字段。键为 tag 名（make/model/orientation/dateTime/artist/
+      copyright/software/imageDescription）或数字字符串，值为 str/int/float；
+    - strip：移除全部 EXIF。
+    """
+    p = _resolve_path(imagePath)
+    out = _resolve_path(outputPath)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    img = _open(p)
+    try:
+        if not exif and not strip:
+            # 读取模式
+            exif_obj = img.getexif()
+            result: dict[str, Any] = {}
+            for tag_id, value in exif_obj.items():
+                result[str(tag_id)] = value if isinstance(value, (str, int, float)) else str(value)
+            exif_ifd = exif_obj.get_ifd(0x8769)
+            for tag_id, value in exif_ifd.items():
+                result[f"exif:{tag_id}"] = value if isinstance(value, (str, int, float)) else str(value)
+            return {"exif": result, "count": len(result)}
+
+        target = _target_format(out, img.format or "JPEG")
+        if target == "PNG":
+            raise ValueError("PNG 不支持 EXIF 写入，请保存为 JPEG/TIFF/WebP")
+
+        if strip:
+            # 不携带 exif 即剥离
+            plain = img.copy()
+            plain.save(out, format=target)
+            return {"outputPath": str(out), "stripped": True}
+
+        exif_obj = img.getexif()
+        written = 0
+        for key, value in (exif or {}).items():
+            tag_id: int | None
+            if isinstance(key, str) and key.lower() in _EXIF_TAG_NAMES:
+                tag_id = _EXIF_TAG_NAMES[key.lower()]
+            else:
+                try:
+                    tag_id = int(key)
+                except (TypeError, ValueError):
+                    raise ValueError(f"未知 EXIF tag: {key}")
+            if isinstance(value, (dict, list)):
+                raise ValueError(f"EXIF 值不支持嵌套类型: {key}")
+            if isinstance(value, str) and any(ord(c) > 0xFF for c in value):
+                # EXIF ASCII 类型仅 Latin-1；Pillow 会静默替换为 '?' 造成数据损坏
+                raise ValueError(f"EXIF 值含非 Latin-1 字符（中文等请改用数字 tag 或先转写）: {key}")
+            exif_obj[tag_id] = value
+            written += 1
+        img.save(out, format=target, exif=exif_obj.tobytes())
+        return {"outputPath": str(out), "written": written}
+    finally:
+        img.close()

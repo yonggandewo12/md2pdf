@@ -1,6 +1,6 @@
 {
   "name": "general-tools-mcp-server",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "MCP server for HTML/Markdown/PDF conversion, local OCR, PDF classification, PPT generation, and document-to-Markdown conversion",
   "type": "module",
   "bin": {
@@ -29,10 +29,10 @@
     "x64"
   ],
   "optionalDependencies": {
-    "general-tools-mcp-server-runtime-darwin-arm64": "1.8.0",
-    "general-tools-mcp-server-runtime-linux-arm64-gnu": "1.8.0",
-    "general-tools-mcp-server-runtime-linux-x64-gnu": "1.8.0",
-    "general-tools-mcp-server-runtime-win32-x64-msvc": "1.8.0"
+    "general-tools-mcp-server-runtime-darwin-arm64": "1.9.0",
+    "general-tools-mcp-server-runtime-linux-arm64-gnu": "1.9.0",
+    "general-tools-mcp-server-runtime-linux-x64-gnu": "1.9.0",
+    "general-tools-mcp-server-runtime-win32-x64-msvc": "1.9.0"
   },
   "scripts": {
     "build": "tsc",
@@ -63,22 +63,30 @@
     "@firecrawl/pdf-inspector": "^1.15.0",
     "@llamaindex/liteparse": "^2.2.0",
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "@pdf-lib/fontkit": "^1.1.1",
+    "better-sqlite3": "^13.0.3",
     "cheerio": "^1.2.0",
     "docx": "^9.7.1",
+    "epub-gen": "^0.1.0",
+    "fflate": "^0.8.3",
     "fontkit": "^1.9.0",
     "image-size": "^1.2.1",
+    "jimp": "^1.6.1",
     "markdown-it": "^14.2.0",
     "markdown-it-anchor": "^9.2.0",
     "mermaid": "^10.9.8",
     "onnxruntime-node": "^1.29.0",
     "pdf-lib": "^1.17.1",
-    "puppeteer": "^23.11.1"
+    "puppeteer": "^23.11.1",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/fontkit": "^2.0.9",
     "@types/markdown-it": "^14.1.2",
     "@types/markdown-it-anchor": "^4.0.4",
     "@types/node": "^22.10.1",
+    "@types/qrcode": "^1.5.6",
     "jszip": "^3.10.1",
     "tsx": "^4.22.3",
     "typescript": "^5.7.2",

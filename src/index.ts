@@ -30,6 +30,13 @@ import { PPT_TOOLS, PPT_ACTION_MAP } from './ppt-tools.js';
 import { PptService } from './ppt-service.js';
 import { IMAGE_TOOLS, IMAGE_ACTION_MAP } from './image-tools.js';
 import { ImageService } from './image-service.js';
+import { EXTRA_TOOLS } from './extra-tools.js';
+import { fillPdfForm } from './pdf-form-service.js';
+import { mdToEpub } from './epub-service.js';
+import { generateQrcode } from './qrcode-service.js';
+import { compressArchive, extractArchive } from './archive-service.js';
+import { sqliteQuery, sqliteExec, sqliteTables } from './sqlite-service.js';
+import { recognizeFormula } from './formula-ocr-service.js';
 
 /**
  * Read the package version once at startup so the MCP server advertises the
@@ -615,7 +622,7 @@ class Md2PdfServer {
     // List available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       return {
-        tools: [CONVERT_HTML_TO_PDF_TOOL, CONVERT_HTML_TO_IMAGE_TOOL, CONVERT_MD_TO_HTML_TOOL, CONVERT_MD_TO_PDF_TOOL, RECOGNIZE_TEXT_TOOL, CLASSIFY_PDF_TOOL, EXTRACT_PDF_TEXT_TOOL, SCREENSHOT_PDF_TOOL, GENERATE_PRESENTATION_TOOL, CONVERT_TO_MARKDOWN_TOOL, ...EXCEL_TOOLS, ...DOCX_TOOLS, ...PDF_TOOLS, ...PPT_TOOLS, ...IMAGE_TOOLS]
+        tools: [CONVERT_HTML_TO_PDF_TOOL, CONVERT_HTML_TO_IMAGE_TOOL, CONVERT_MD_TO_HTML_TOOL, CONVERT_MD_TO_PDF_TOOL, RECOGNIZE_TEXT_TOOL, CLASSIFY_PDF_TOOL, EXTRACT_PDF_TEXT_TOOL, SCREENSHOT_PDF_TOOL, GENERATE_PRESENTATION_TOOL, CONVERT_TO_MARKDOWN_TOOL, ...EXCEL_TOOLS, ...DOCX_TOOLS, ...PDF_TOOLS, ...PPT_TOOLS, ...IMAGE_TOOLS, ...EXTRA_TOOLS]
       };
     });
 
@@ -876,6 +883,132 @@ class Md2PdfServer {
               }
             ],
             isError: true
+          };
+        }
+      }
+
+      if (name === 'pdf_fill_form') {
+        try {
+          const result = await fillPdfForm(args as unknown as Parameters<typeof fillPdfForm>[0]);
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+            isError: !result.success,
+          };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }, null, 2) }],
+            isError: true,
+          };
+        }
+      }
+
+      if (name === 'md_to_epub') {
+        try {
+          const { mdPath, mdContent, outputPath, title, author, publisher, cover, splitByHeading, embedImages, version } = args as Record<string, unknown>;
+          if (!mdPath && !mdContent) throw new Error('Either mdPath or mdContent must be provided');
+          if (!outputPath) throw new Error('outputPath is required');
+          const result = await mdToEpub({
+            mdPath: mdPath as string | undefined,
+            mdContent: mdContent as string | undefined,
+            outputPath: outputPath as string,
+            title: title as string | undefined,
+            author: author as string | undefined,
+            publisher: publisher as string | undefined,
+            cover: cover as string | undefined,
+            splitByHeading: splitByHeading as boolean | undefined,
+            embedImages: embedImages as boolean | undefined,
+            version: version as number | undefined,
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], isError: !result.success };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }, null, 2) }],
+            isError: true,
+          };
+        }
+      }
+
+      if (name === 'qrcode_generate') {
+        try {
+          const result = await generateQrcode(args as unknown as Parameters<typeof generateQrcode>[0]);
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], isError: !result.success };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }, null, 2) }],
+            isError: true,
+          };
+        }
+      }
+
+      if (name === 'archive_compress') {
+        try {
+          const result = await compressArchive(args as unknown as Parameters<typeof compressArchive>[0]);
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], isError: !result.success };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }, null, 2) }],
+            isError: true,
+          };
+        }
+      }
+
+      if (name === 'archive_extract') {
+        try {
+          const result = await extractArchive(args as unknown as Parameters<typeof extractArchive>[0]);
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], isError: !result.success };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }, null, 2) }],
+            isError: true,
+          };
+        }
+      }
+
+      if (name === 'sqlite_query') {
+        try {
+          const result = await sqliteQuery(args as unknown as Parameters<typeof sqliteQuery>[0]);
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], isError: !result.success };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }, null, 2) }],
+            isError: true,
+          };
+        }
+      }
+
+      if (name === 'sqlite_exec') {
+        try {
+          const result = await sqliteExec(args as unknown as Parameters<typeof sqliteExec>[0]);
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], isError: !result.success };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }, null, 2) }],
+            isError: true,
+          };
+        }
+      }
+
+      if (name === 'sqlite_tables') {
+        try {
+          const { dbPath } = args as unknown as { dbPath: string };
+          const result = await sqliteTables(dbPath);
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], isError: !result.success };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }, null, 2) }],
+            isError: true,
+          };
+        }
+      }
+
+      if (name === 'formula_ocr') {
+        try {
+          const result = await recognizeFormula(args as unknown as Parameters<typeof recognizeFormula>[0]);
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], isError: !result.success };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ success: false, error: error instanceof Error ? error.message : String(error) }, null, 2) }],
+            isError: true,
           };
         }
       }
