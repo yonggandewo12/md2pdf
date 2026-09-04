@@ -256,6 +256,7 @@ describe('PDF 后处理（pdf-lib）', () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
+  // CJK 字体子集化（Windows msyh.ttc 等大字体）在 CI runner 上可超过 5s
   it('addWatermark 中文水印（嵌入中文字体）', async () => {
     const dir = await tmp();
     const pdf = path.join(dir, 'cn.pdf');
@@ -264,7 +265,7 @@ describe('PDF 后处理（pdf-lib）', () => {
     // 中文字体嵌入失败也应回退而非崩溃（无中文字体时跳过绘制，不抛 WinAnsi 错误）
     expect(r.success).toBe(true);
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, 30000);
 
   it('addQrCode 末页嵌入二维码 + 说明文字', async () => {
     const dir = await tmp();
@@ -290,5 +291,5 @@ describe('PDF 后处理（pdf-lib）', () => {
     const r = await pdfPostProcessor.addQrCode(pdf, qr, { customText: '扫码查看' });
     expect(r.success).toBe(true);
     await fs.rm(dir, { recursive: true, force: true });
-  });
+  }, 30000);
 });
